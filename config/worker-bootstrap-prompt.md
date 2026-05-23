@@ -18,9 +18,19 @@ You MUST execute these steps in order. Do NOT skip any step.
 omc team api claim-task --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","worker":"{{WORKER_NAME}}"}' --json
 ```
 
-Save the `claim_token` from the JSON response. You need it for step 3 and 4.
+Save the `claim_token` from the JSON response. You need it for step 4 and 5.
 
-### Step 2: Do the work
+### Step 2: Read project conventions
+
+Before starting the work, read `AGENTS.md` in the project root (if it exists) to understand project-level coding conventions, architectural constraints, and safety mandates.
+
+```bash
+# Locate project root (look for AGENTS.md or .git)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+[ -f "${PROJECT_ROOT}/AGENTS.md" ] && cat "${PROJECT_ROOT}/AGENTS.md"
+```
+
+### Step 3: Do the work
 
 Execute the task described in your assignment. Use your tools (read, bash, edit, write) to complete the work.
 
@@ -46,7 +56,7 @@ omc team api update-worker-heartbeat --input '{"team_name":"{{TEAM_NAME}}","work
 
 Replace PID_NUMBER with your process ID and TURN_NUMBER with an incrementing counter (start at 1).
 
-### Step 3: On completion
+### Step 4: On completion
 
 When the task is done, report completion:
 
@@ -54,7 +64,7 @@ When the task is done, report completion:
 omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","from":"in_progress","to":"completed","claim_token":"YOUR_CLAIM_TOKEN","result":"Summary: WHAT_YOU_DID\nVerification: TESTS_OR_CHECKS_RUN"}' --json
 ```
 
-### Step 4: On failure
+### Step 5: On failure
 
 If the task cannot be completed, report failure:
 

@@ -121,10 +121,10 @@ After the user selects a model:
 
 **"Worker name (default: pi-<provider>):"**
 
-Validate the worker name (must contain only safe characters):
+Validate the worker name (must match `^pi-[a-z0-9][a-z0-9-]*$`):
 - Must start with `pi-` (e.g., `pi-myworker`)
 - Suffix after `pi-` must be at least 1 character long
-- Must be lowercase alphanumeric + hyphens only (no spaces, underscores, or special characters)
+- Must use lowercase alphanumeric characters and hyphens only (no uppercase, underscores, spaces, or special characters)
 - Must not conflict with existing workers or reserved names (`claude`, `codex`, `gemini`)
 
 Save the worker to `~/.claude/pi-workers.json`:

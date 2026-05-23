@@ -53,14 +53,14 @@ fi
 **Validate every pi worker referenced:**
 - Parse each `N:pi-{name}` token
 - Extract worker name (strip optional `/model` suffix)
-- **Validate worker name contains only safe characters** (alphanumeric, hyphens, underscores)
+- **Validate worker name matches `^pi-[a-z0-9][a-z0-9-]*$`** (lowercase alphanumeric and hyphens only; no uppercase, underscores, spaces, or special characters)
 - Look up `pi-{name}` in `~/.claude/pi-workers.json`
 - If not found: ERROR with suggestion to run `/pi-setup`
 
 ### Phase 1: Parse and Classify Workers
 
 **Input format:** `N:type[,N:type,...] "task description"`
-**Regex:** `/(\d+):([a-zA-Z0-9_\/-]+)/g`
+**Regex:** `/(\d+):([a-z0-9-]+(?:\/[A-Za-z0-9._-]+)?)/g`
 
 **Classify each token:**
 - Starts with `pi-` → `piWorkers[]` array
@@ -85,6 +85,18 @@ Result:
 ```bash
 CLEAN_TASK=$(printf "%s" "<task>" | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^\-//')
 TEAM_NAME="pi-${CLEAN_TASK}-$(date +%s | tail -c 4)"
+
+# Validate team name immediately after assignment before using it in paths.
+case "$TEAM_NAME" in
+  ""|*[!a-zA-Z0-9_-]*)
+    echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
+    exit 1
+    ;;
+esac
+
+# Capture the full task description and calculate total workers
+MAIN_TASK="<task description>"
+TOTAL_WORKERS=$(printf "%s" "$WORKER_SPEC" | grep -oE '(^|,)[[:space:]]*[0-9]+:' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s}')
 ```
 
 ### Phase 2: Decompose Task
@@ -113,14 +125,17 @@ NATIVE_TASKS="[codex] <codex-subtask>; [gemini] <gemini-subtask>"
 
 NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
 # omc team outputs plain text like: "Team started: <name>\ntmux session: ...\nworkers: ..."
-TEAM_NAME=$(printf "%s" "$NATIVE_OUTPUT" | grep -oP 'Team started: *\K.*')
+TEAM_NAME=$(printf "%s" "$NATIVE_OUTPUT" | grep -E '^Team started:' | sed -E 's/^Team started:[[:space:]]*//' | head -n 1)
 [ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name from output:\n$NATIVE_OUTPUT"; exit 1; }
 
-# Validate team name contains only safe characters
-if ! [[ "$TEAM_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
-  exit 1
-fi
+# Validate team name immediately after assignment before using it in paths.
+case "$TEAM_NAME" in
+  ""|*[!a-zA-Z0-9_-]*)
+    echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
+    exit 1
+    ;;
+esac
+
 ```
 
 Use `--no-decompose` only when every native worker should receive the same task text.
@@ -144,17 +159,29 @@ For each pi worker, do the following:
 If omc team was NOT launched in Phase 3:
 ```bash
 # Create state directories
-mkdir -p .omc/state/team/${TEAM_NAME}/{tasks,workers,mailbox,dispatch,approvals}
+mkdir -p ".omc/state/team/${TEAM_NAME}"/{tasks,workers,mailbox,dispatch,approvals}
 ```
 
 Write **both** config.json and manifest.json. The manifest.json is required for `omc team api claim-task` to recognize workers — omitting it causes `worker_not_found` errors.
 
 ```bash
+json_string() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv[1] || ""))' "$1"
+}
+
+: "${MAIN_TASK:?ERROR: MAIN_TASK is required}"
+: "${TOTAL_WORKERS:?ERROR: TOTAL_WORKERS is required}"
+CREATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+TMUX_SESSION=$(tmux display-message -p '#S')
+LEADER_PANE_ID=$(tmux display-message -p '#{pane_id}')
+LEADER_CWD=$(pwd)
+TEAM_STATE_ROOT="${LEADER_CWD}/.omc/state/team/${TEAM_NAME}"
+
 # Write config.json
-cat > .omc/state/team/${TEAM_NAME}/config.json << 'CFGEOF'
+cat > ".omc/state/team/${TEAM_NAME}/config.json" << CFGEOF
 {
-  "name": "<TEAM_NAME>",
-  "task": "<main task>",
+  "name": $(json_string "$TEAM_NAME"),
+  "task": $(json_string "$MAIN_TASK"),
   "agent_type": "pi-custom",
   "policy": {
     "display_mode": "split_pane",
@@ -170,28 +197,28 @@ cat > .omc/state/team/${TEAM_NAME}/config.json << 'CFGEOF'
     "cleanup_requires_all_workers_inactive": true
   },
   "worker_launch_mode": "interactive",
-  "worker_count": <total>,
+  "worker_count": ${TOTAL_WORKERS},
   "max_workers": 20,
   "workers": [],
   "next_task_id": 1,
-  "created_at": "<ISO>",
-  "tmux_session": "<session>",
-  "leader_pane_id": "<current pane>",
-  "leader_cwd": "<cwd>",
-  "team_state_root": "<cwd>/.omc/state/team/<TEAM_NAME>",
+  "created_at": $(json_string "$CREATED_AT"),
+  "tmux_session": $(json_string "$TMUX_SESSION"),
+  "leader_pane_id": $(json_string "$LEADER_PANE_ID"),
+  "leader_cwd": $(json_string "$LEADER_CWD"),
+  "team_state_root": $(json_string "$TEAM_STATE_ROOT"),
   "workspace_mode": "single",
   "worktree_mode": "disabled"
 }
 CFGEOF
 
 # Write manifest.json (REQUIRED for claim-task worker validation)
-cat > .omc/state/team/${TEAM_NAME}/manifest.json << 'MANEOF'
+cat > ".omc/state/team/${TEAM_NAME}/manifest.json" << MANEOF
 {
   "schema_version": 2,
-  "name": "<TEAM_NAME>",
-  "task": "<main task>",
+  "name": $(json_string "$TEAM_NAME"),
+  "task": $(json_string "$MAIN_TASK"),
   "leader": {
-    "session_id": "<tmux_session>:0",
+    "session_id": $(json_string "${TMUX_SESSION}:0"),
     "worker_id": "leader-fixed",
     "role": "leader"
   },
@@ -213,16 +240,16 @@ cat > .omc/state/team/${TEAM_NAME}/manifest.json << 'MANEOF'
     "sandbox_mode": "default",
     "network_access": false
   },
-  "tmux_session": "<tmux_session>",
+  "tmux_session": $(json_string "$TMUX_SESSION"),
   "worker_count": 0,
   "workers": [],
   "next_task_id": 1,
-  "created_at": "<ISO>",
-  "leader_cwd": "<cwd>",
-  "team_state_root": "<cwd>/.omc/state/team/<TEAM_NAME>",
+  "created_at": $(json_string "$CREATED_AT"),
+  "leader_cwd": $(json_string "$LEADER_CWD"),
+  "team_state_root": $(json_string "$TEAM_STATE_ROOT"),
   "workspace_mode": "single",
   "worktree_mode": "disabled",
-  "leader_pane_id": "<current pane>",
+  "leader_pane_id": $(json_string "$LEADER_PANE_ID"),
   "hud_pane_id": null
 }
 MANEOF
@@ -421,6 +448,7 @@ omc team api write-worker-inbox --input "$WORKER_INBOX_INPUT" --json
 
 Also send an initial message to the pi pane to trigger it to start:
 ```bash
+# The empty string is intentional: Enter wakes the interactive pi pane after the inbox is written.
 tmux send-keys -t "$PANE_ID" "" Enter
 ```
 
@@ -447,11 +475,12 @@ PANE_PID=$?
 if [ "$PANE_PID" -eq 0 ]; then
   # Pane alive — update heartbeat
   PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}')
+  HEARTBEAT_COUNT=$(( ${HEARTBEAT_COUNT:-0} + 1 ))
   omc team api update-worker-heartbeat --input '{
     "team_name": "'"$TEAM_NAME"'",
     "worker": "'"$WORKER_NAME"'",
     "pid": '"$PID"',
-    "turn_count": <increment>,
+    "turn_count": '"$HEARTBEAT_COUNT"',
     "alive": true
   }' --json
 else
@@ -466,7 +495,7 @@ process.stdout.write(data.data?.task?.status || "unknown");
 ')
 
   if [ "$TASK_STATUS" = "in_progress" ]; then
-    RESTART_COUNT=$(expr ${RESTART_COUNT:-0} + 1)
+    RESTART_COUNT=$(( ${RESTART_COUNT:-0} + 1 ))
     if [ "$RESTART_COUNT" -gt 3 ]; then
       echo "ERROR: pi worker dead after 3 respawn attempts — fundamental failure"
       # Failure transition requires a claim_token from claim-task.
