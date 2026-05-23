@@ -17,11 +17,14 @@ README.md                      — User-facing documentation
 
 ## Key Design Decisions
 
-- **manifest.json is critical**: `omc team api claim-task` validates workers against `manifest.json`, not `config.json`. Both files must be created (Phase 4a) and updated (Phase 4d) for pi workers.
+- **manifest.json is critical**: `omc team api claim-task` validates workers against `manifest.json`, not `config.json`. Both files must be created (Phase 4a) and updated (Phase 4c — before spawn) for pi workers.
+- **Registration before spawn**: Phase 4c (register) runs BEFORE Phase 4d (spawn tmux pane) to prevent race conditions.
 - **omc vs omx**: `omc` and `omx` are aliases. This plugin uses `omc` throughout.
-- **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json. The API call creates the identity file; the direct writes ensure claim-task can find the worker.
-- **Git commit protocol**: Bootstrap template instructs pi workers to commit changes before reporting task completion.
-- **Template variables**: `{{TEAM_NAME}}`, `{{WORKER_NAME}}`, `{{TASK_ID}}`, `{{CWD}}`, `{{STATE_ROOT}}` — substituted via Node.js in SKILL.md Phase 4c.
+- **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json.
+- **Prerequisite gating**: pi CLI and pi-workers.json checks are skipped for all-native teams.
+- **Plugin root resolution**: `CLAUDE_PLUGIN_ROOT` → `OMC_PLUGIN_ROOT` → git root → cwd fallback chain.
+- **Git commit protocol**: Bootstrap instructs pi workers to commit changes before reporting task completion.
+- **Template variables**: `{{TEAM_NAME}}`, `{{WORKER_NAME}}`, `{{TASK_ID}}`, `{{CWD}}`, `{{STATE_ROOT}}` — substituted via Node.js in SKILL.md Phase 4d.
 
 ## Testing
 

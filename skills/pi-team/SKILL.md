@@ -33,17 +33,21 @@ command -v tmux >/dev/null 2>&1 || { echo "ERROR: tmux not installed"; exit 1; }
 # omc CLI
 command -v omc >/dev/null 2>&1 || { echo "ERROR: omc not installed"; exit 1; }
 
-# pi CLI (only if pi workers are requested)
-command -v pi >/dev/null 2>&1 || { echo "ERROR: pi not installed. Run /pi-setup first."; exit 1; }
+# pi CLI (only if pi workers are requested — skip this check for all-native teams)
+if echo "$WORKER_SPEC" | grep -q 'pi-'; then
+  command -v pi >/dev/null 2>&1 || { echo "ERROR: pi not installed. Run /pi-setup first."; exit 1; }
+fi
 
 # tmux session
 echo "TMUX=$TMUX"
 tmux display-message -p '#S' 2>/dev/null || echo "Not in tmux"
 ```
 
-Read worker configuration:
+Read worker configuration (only needed if pi workers are present):
 ```bash
-cat ~/.claude/pi-workers.json
+if echo "$WORKER_SPEC" | grep -q 'pi-'; then
+  cat ~/.claude/pi-workers.json || { echo "ERROR: pi-workers.json not found. Run /pi-setup first."; exit 1; }
+fi
 ```
 
 **Validate every pi worker referenced:**
@@ -257,6 +261,10 @@ Do not write `tasks/task-*.json` directly. `omc team api create-task` creates th
 
 For each pi worker instance:
 
+**IMPORTANT: Registration (Phase 4c) MUST happen before spawning (Phase 4d).** If the worker spawns before it's registered in manifest.json, a fast-starting pi worker can hit `worker_not_found` when it tries to claim its task.
+
+#### 4c: Register worker with omc team (BEFORE spawning)
+
 ```bash
 # Determine split target (last worker pane or leader pane)
 SPLIT_TARGET="<last-pane-or-leader>"
@@ -268,73 +276,29 @@ MODEL="<model>"  # Use override if pi-name/model was specified
 WORKER_NAME="pi-${NAME}-${INDEX}"
 TEAM_STATE_ROOT="$(pwd)/.omc/state/team/${TEAM_NAME}"
 
-# Read and render bootstrap template
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$PROJECT_ROOT}"
-BOOTSTRAP_TEMPLATE="${PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
-[ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: worker bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
-
-BOOTSTRAP=$(TEAM_NAME="$TEAM_NAME" WORKER_NAME="$WORKER_NAME" TASK_ID="$TASK_ID" CWD="$(pwd)" STATE_ROOT="$TEAM_STATE_ROOT" \
-  node - "$BOOTSTRAP_TEMPLATE" <<'NODE'
-const fs = require("fs");
-const templatePath = process.argv[2];
-let text = fs.readFileSync(templatePath, "utf8");
-for (const key of ["TEAM_NAME", "WORKER_NAME", "TASK_ID", "CWD", "STATE_ROOT"]) {
-  text = text.split(`{{${key}}}`).join(process.env[key] || "");
-}
-process.stdout.write(text);
-NODE
-)
-
-# Build task instruction with lifecycle commands
-TASK_INSTRUCTION="## Task Assignment
-Task ID: ${TASK_ID}
-Worker: ${WORKER_NAME}
-
-### REQUIRED: Task Lifecycle
-1. Claim: omc team api claim-task --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"worker\":\"${WORKER_NAME}\"}' --json
-2. Do the work described below.
-3. Complete: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"completed\",\"claim_token\":\"<claim_token>\",\"result\":\"Summary: <what changed>\"}' --json
-4. On failure: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"failed\",\"claim_token\":\"<claim_token>\"}' --json
-
-### Task
-${SUBTASK_DESCRIPTION}"
-
-# Spawn in tmux. Quote every dynamic pi argument before it enters the shell command string.
-PROVIDER_ARG=$(printf '%q' "$PROVIDER")
-MODEL_ARG=$(printf '%q' "$MODEL")
-BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
-TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
-PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
-PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" "$PI_COMMAND")
-```
-
-Record the pane ID.
-
-#### 4d: Register worker with omc team
-
-```bash
+# Register worker identity and update config + manifest BEFORE spawning the pane.
+# Use placeholder pane_id; will be updated after spawn if needed.
 WORKER_IDENTITY_INPUT=$(node -e '
-const [teamName, worker, index, taskId, paneId, workingDir, teamStateRoot, provider, model] = process.argv.slice(1);
+const [teamName, worker, index, taskId, workingDir, teamStateRoot, provider, model] = process.argv.slice(1);
 process.stdout.write(JSON.stringify({
   team_name: teamName,
   worker,
   index: Number(index),
   role: "executor",
   assigned_tasks: [taskId],
-  pane_id: paneId,
+  pane_id: "pending",  // Placeholder, updated after spawn
   working_dir: workingDir,
   team_state_root: teamStateRoot,
   worker_cli: "pi",
   provider,
   model
 }));
-' "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$PANE_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
+' "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
 
 omc team api write-worker-identity --input "$WORKER_IDENTITY_INPUT" --json
 
 TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" WORKER_INDEX="$INDEX" TASK_ID="$TASK_ID" \
-PANE_ID="$PANE_ID" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" node <<'NODE'
+PANE_ID="pending" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" node <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
@@ -372,6 +336,70 @@ if (fs.existsSync(manifestPath)) {
 }
 NODE
 ```
+
+#### 4d: Spawn pi worker pane (AFTER registration)
+
+```bash
+# Read and render bootstrap template
+# Resolve plugin root: prefer env vars, then git root, then cwd
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${OMC_PLUGIN_ROOT:-$PROJECT_ROOT}}"
+BOOTSTRAP_TEMPLATE="${PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
+[ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: worker bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
+
+BOOTSTRAP=$(TEAM_NAME="$TEAM_NAME" WORKER_NAME="$WORKER_NAME" TASK_ID="$TASK_ID" CWD="$(pwd)" STATE_ROOT="$TEAM_STATE_ROOT" \
+  node - "$BOOTSTRAP_TEMPLATE" <<'NODE'
+const fs = require("fs");
+const templatePath = process.argv[2];
+let text = fs.readFileSync(templatePath, "utf8");
+for (const key of ["TEAM_NAME", "WORKER_NAME", "TASK_ID", "CWD", "STATE_ROOT"]) {
+  text = text.split(`{{${key}}}`).join(process.env[key] || "");
+}
+process.stdout.write(text);
+NODE
+)
+
+# Build task instruction with lifecycle commands
+TASK_INSTRUCTION="## Task Assignment
+Task ID: ${TASK_ID}
+Worker: ${WORKER_NAME}
+
+### REQUIRED: Task Lifecycle
+1. Claim: omc team api claim-task --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"worker\":\"${WORKER_NAME}\"}' --json
+2. Do the work described below.
+3. Complete: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"completed\",\"claim_token\":\"<claim_token>\",\"result\":\"Summary: <what changed>\"}' --json
+4. On failure: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"failed\",\"claim_token\":\"<claim_token>\"}' --json
+
+### Task
+${SUBTASK_DESCRIPTION}"
+
+# Spawn in tmux. Quote every dynamic pi argument before it enters the shell command string.
+PROVIDER_ARG=$(printf '%q' "$PROVIDER")
+MODEL_ARG=$(printf '%q' "$MODEL")
+BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
+TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
+PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
+PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" "$PI_COMMAND")
+
+# Update pane_id in config + manifest now that we have the real pane ID
+TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" PANE_ID="$PANE_ID" node <<'PANEUPDATE'
+const fs = require("fs");
+const path = require("path");
+const root = process.env.TEAM_STATE_ROOT;
+const name = process.env.WORKER_NAME;
+const paneId = process.env.PANE_ID;
+for (const file of ["config.json", "manifest.json"]) {
+  const fp = path.join(root, file);
+  try {
+    const data = JSON.parse(fs.readFileSync(fp, "utf8"));
+    const w = (data.workers || []).find(e => e.name === name);
+    if (w) { w.pane_id = paneId; fs.writeFileSync(fp, JSON.stringify(data, null, 2) + "\n"); }
+  } catch {}
+}
+PANEUPDATE
+```
+
+Record the pane ID.
 
 #### 4e: Send initial task dispatch
 
@@ -440,7 +468,8 @@ process.stdout.write(data.data?.task?.status || "unknown");
     TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
     PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
     tmux respawn-pane -k -t "$PANE_ID" "$PI_COMMAND"
-    # Increment restart counter, stop after 3 attempts
+    # Exponential backoff: sleep 2^attempt seconds before retry
+    # Stop after 3 attempts to avoid infinite respawn loops
   fi
 fi
 ```
@@ -494,6 +523,9 @@ omc team shutdown "$TEAM_NAME" --force
 | `omc team status: not found` | Team state missing | Check .omc/state/team/ |
 | Worker pane dead after respawn ×3 | Fundamental failure | Report to user, mark task failed |
 | `claim_token` error | Task already claimed | Skip to next available task |
+| `worker_not_found` on claim | Worker not in manifest.json | Verify Phase 4c registration ran before Phase 4d |
+| `write-worker-inbox` fails | Worker directory missing | Verify write-worker-identity ran first |
+| Bootstrap template not found | PLUGIN_ROOT misresolved | Set CLAUDE_PLUGIN_ROOT or OMC_PLUGIN_ROOT env var |
 
 ## Edge Cases
 

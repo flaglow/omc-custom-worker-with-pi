@@ -24,14 +24,16 @@ Save the `claim_token` from the JSON response. You need it for step 3 and 4.
 
 Execute the task described in your assignment. Use your tools (read, bash, edit, write) to complete the work.
 
-**IMPORTANT: Git commit before completion.** After finishing the work, commit your changes:
+**IMPORTANT: Git commit before completion.** After finishing the work, commit only your changes:
 
 ```bash
+# Stage only the files you changed (avoid staging unrelated work)
 git add -A
+git diff --cached --stat   # Review what will be committed
 git commit -m "task: <brief description of what you did>"
 ```
 
-If there are no changes to commit (e.g., read-only analysis task), skip this step.
+In shared workspace mode (single workspace, no worktrees), be careful not to overwrite other workers' uncommitted changes. If there are no changes to commit (e.g., read-only analysis task), skip this step.
 
 While working, periodically update your status (every 2-3 minutes):
 

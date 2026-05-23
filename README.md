@@ -101,7 +101,7 @@
 
 ## How It Works
 
-1. **Worker bootstrap:** Pi workers receive a system prompt via `--append-system-prompt` that instructs them to follow the omc team API protocol (claim tasks, update heartbeat, report completion). The bootstrap includes git commit instructions and mailbox acknowledgment protocol.
+1. **Worker bootstrap:** Pi workers receive a system prompt via `--append-system-prompt` that instructs them to follow the omc team API protocol (claim tasks, update heartbeat, report completion). Workers are registered in manifest.json **before** spawning to prevent race conditions.
 
 2. **Team integration:** Pi workers are registered via `omc team api write-worker-identity`, and both `config.json` and `manifest.json` are updated so that `omc team api claim-task` recognizes the worker. Workers are visible in `omc team status` alongside native workers.
 
