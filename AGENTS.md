@@ -22,7 +22,8 @@ README.md                      — User-facing documentation
 - **omc vs omx**: `omc` and `omx` are aliases. This plugin uses `omc` throughout.
 - **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json.
 - **Prerequisite gating**: pi CLI and pi-workers.json checks are skipped for all-native teams.
-- **Plugin root resolution**: `CLAUDE_PLUGIN_ROOT` → `OMC_PLUGIN_ROOT` → git root → cwd fallback chain.
+- **Plugin root resolution**: `CLAUDE_PLUGIN_ROOT` → `OMC_PLUGIN_ROOT` → git root → cwd fallback chain. Validated with `realpath` before loading bootstrap to prevent poisoned env injection.
+- **Shell interpolation safety**: Values passed to `node -e` use `process.argv` or env vars, never inline string interpolation. Task text is assigned via single-quoted shell variables or `printf %q` to prevent command substitution from untrusted input.
 - **Git commit protocol**: Bootstrap instructs pi workers to stage only their explicitly changed files (`git add -- <paths>`, never `git add -A`) before committing, to avoid contaminating shared-workspace worktrees with other workers' or user changes.
 - **claim_token required for failure transitions**: `omc team api transition-task-status` always requires a `claim_token`. The dead-worker exhausted-respawn path must call `claim-task` first to obtain a token before marking the task `failed`.
 - **Template variables**: `{{TEAM_NAME}}`, `{{WORKER_NAME}}`, `{{TASK_ID}}`, `{{CWD}}`, `{{STATE_ROOT}}` — substituted via Node.js in SKILL.md Phase 4d.
