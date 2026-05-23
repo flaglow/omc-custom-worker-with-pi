@@ -38,6 +38,9 @@ if echo "$WORKER_SPEC" | grep -q 'pi-'; then
   command -v pi >/dev/null 2>&1 || { echo "ERROR: pi not installed. Run /pi-setup first."; exit 1; }
 fi
 
+# Node.js (required for JSON helpers and worker bootstrap)
+command -v node >/dev/null 2>&1 || { echo "ERROR: node not installed"; exit 1; }
+
 # tmux session
 echo "TMUX=$TMUX"
 tmux display-message -p '#S' 2>/dev/null || echo "Not in tmux"
@@ -83,9 +86,9 @@ Result:
 
 **Generate team name:**
 ```bash
-# Task text is untreated / untrusted — use single quotes to prevent command substitution.
-CLEAN_TASK=$(printf '%s' '<task>' | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^\-//')
-TEAM_NAME="pi-${CLEAN_TASK}-$(date +%s | tail -c 4)"
+# Task text is untrusted — sanitized by the sed/tr pipeline before use in team name.
+CLEAN_TASK=$(printf '%s' '<task>' | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^-\+//' | sed 's/^\-//')
+TEAM_NAME="pi-${CLEAN_TASK}-$(date +%s | grep -oE '.{4}$')"
 
 # Validate team name immediately after assignment before using it in paths.
 case "$TEAM_NAME" in
@@ -96,7 +99,7 @@ case "$TEAM_NAME" in
 esac
 
 # Capture the full task description and calculate total workers
-# Task text is untreated / untrusted — use single quotes to prevent command substitution.
+# Task text is untrusted — passed to node helpers via process.argv to avoid shell interpolation.
 MAIN_TASK='<task description>'
 TOTAL_WORKERS=$(printf "%s" "$WORKER_SPEC" | grep -oE '(^|,)[[:space:]]*[0-9]+:' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s}')
 ```
@@ -123,7 +126,7 @@ If `nativeWorkers` is non-empty:
 # Build the native worker spec for omc team
 # e.g., for 1:codex, 1:gemini -> NATIVE_SPEC="1:codex,1:gemini"
 NATIVE_SPEC="<N:type[,N:type,...]>"
-# Task text is untreated / untrusted — use single quotes to prevent command substitution.
+# Task text is untrusted — passed as positional args; pi worker tasks use printf %q for safe shell quoting.
 NATIVE_TASKS='[codex] <codex-subtask>; [gemini] <gemini-subtask>'
 
 NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
@@ -169,7 +172,7 @@ Write **both** config.json and manifest.json. The manifest.json is required for 
 
 ```bash
 json_string() {
-  node -e 'process.stdout.write(JSON.stringify(process.argv[1] || ""))' "$1"
+  node -e 'process.stdout.write(JSON.stringify(process.argv[2] || ""))' -- "$1"
 }
 
 : "${MAIN_TASK:?ERROR: MAIN_TASK is required}"
@@ -263,14 +266,14 @@ MANEOF
 For each pi worker's subtask:
 ```bash
 CREATE_TASK_INPUT=$(node -e '
-const [teamName, subject, description] = process.argv.slice(1);
+const [teamName, subject, description] = process.argv.slice(2);
 process.stdout.write(JSON.stringify({
   team_name: teamName,
   subject,
   description,
   blocked_by: []
 }));
-' "$TEAM_NAME" "Task ${i}" "$SUBTASK_DESCRIPTION")
+' -- "$TEAM_NAME" "Task ${i}" "$SUBTASK_DESCRIPTION")
 
 CREATE_TASK_JSON=$(omc team api create-task --input "$CREATE_TASK_INPUT" --json)
 TASK_ID=$(printf "%s" "$CREATE_TASK_JSON" | node -e '
@@ -315,7 +318,7 @@ TEAM_STATE_ROOT="$(pwd)/.omc/state/team/${TEAM_NAME}"
 # Extended metadata (pane_id, provider, model) is handled by the direct manifest/config writes below.
 # Use placeholder pane_id; will be updated after spawn if needed.
 WORKER_IDENTITY_INPUT=$(node -e '
-const [teamName, worker, index, taskId, workingDir, teamStateRoot, provider, model] = process.argv.slice(1);
+const [teamName, worker, index, taskId, workingDir, teamStateRoot, provider, model] = process.argv.slice(2);
 process.stdout.write(JSON.stringify({
   team_name: teamName,
   worker,
@@ -329,7 +332,7 @@ process.stdout.write(JSON.stringify({
   provider,
   model
 }));
-' "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
+' -- "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
 
 omc team api write-worker-identity --input "$WORKER_IDENTITY_INPUT" --json
 
@@ -404,7 +407,7 @@ Worker: ${WORKER_NAME}
 ### REQUIRED: Task Lifecycle
 1. Claim: omc team api claim-task --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"worker\":\"${WORKER_NAME}\"}' --json
 2. Do the work described below.
-3. Complete: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"completed\",\"claim_token\":\"<claim_token>\",\"result\":\"Summary: <what changed>\"}' --json
+3. Complete: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"completed\",\"claim_token\":\"<claim_token>\",\"result\":\"Summary: <what changed>\\nVerification: <tests or checks run>\"}' --json
 4. On failure: omc team api transition-task-status --input '{\"team_name\":\"${TEAM_NAME}\",\"task_id\":\"${TASK_ID}\",\"from\":\"in_progress\",\"to\":\"failed\",\"claim_token\":\"<claim_token>\"}' --json
 
 ### Task
@@ -453,9 +456,9 @@ Record the pane ID.
 Write the task instruction to the worker's inbox:
 ```bash
 WORKER_INBOX_INPUT=$(node -e '
-const [teamName, worker, content] = process.argv.slice(1);
+const [teamName, worker, content] = process.argv.slice(2);
 process.stdout.write(JSON.stringify({ team_name: teamName, worker, content }));
-' "$TEAM_NAME" "$WORKER_NAME" "$TASK_INSTRUCTION")
+' -- "$TEAM_NAME" "$WORKER_NAME" "$TASK_INSTRUCTION")
 
 omc team api write-worker-inbox --input "$WORKER_INBOX_INPUT" --json
 ```
@@ -481,6 +484,7 @@ omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 ```
 
 **For each pi worker, update heartbeat:**
+> **Note:** The leader updates heartbeats for pi workers. Pi workers should **NOT** self-heartbeat — the leader's monitor loop handles all heartbeat calls via `omc team api update-worker-heartbeat`.
 ```bash
 # Check if pane is still alive
 PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null)
