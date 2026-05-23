@@ -34,7 +34,10 @@ README.md                        — User-facing documentation
 - **manifest.json is critical**: `omc team api claim-task` validates workers against `manifest.json`, not `config.json`. Both files must be created (Phase 4a) and updated (Phase 4c — before spawn) for pi workers.
 - **Registration before spawn**: Phase 4c (register) runs BEFORE Phase 4d (spawn tmux pane) to prevent race conditions.
 - **omc vs omx**: `omc` and `omx` are aliases. This plugin uses `omc` throughout.
-- **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json.
+- **Graceful shutdown**: Pi workers receive `write-shutdown-request`, commit partial work, release claims, send final `alive: false` heartbeat, then exit. Leader waits for `read-shutdown-ack` before force shutdown.
+- **Monitor snapshot**: Leader persists team state via `write-monitor-snapshot` on each poll cycle for session recovery after compaction.
+- **Audit events**: Leader logs `worker_respawned`, `task_completed`, `task_failed` events via `append-event` for observability.
+- **Dual heartbeat**: Pi workers self-heartbeat via bootstrap Step 4 (mirrors native worker hook). Leader supplements with tmux pane PID checks as backup. Dead worker detection uses `read-worker-heartbeat` to check self-heartbeat freshness before declaring dead.
 - **Prerequisite gating**: pi CLI and pi-workers.json checks are skipped for all-native teams.
 - **Plugin root resolution**: Uses standard `${CLAUDE_PLUGIN_ROOT}` provided by Claude Code at runtime. No manual fallback chain needed.
 - **Shell interpolation safety**: Values passed to `node -e` use `process.argv` or env vars, never inline string interpolation. Task text is assigned via single-quoted shell variables or `printf %q` to prevent command substitution from untrusted input.

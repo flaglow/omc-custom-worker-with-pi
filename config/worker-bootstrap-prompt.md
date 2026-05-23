@@ -18,7 +18,7 @@ You MUST execute these steps in order. Do NOT skip any step.
 omc team api claim-task --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","worker":"{{WORKER_NAME}}"}' --json
 ```
 
-Save the `claimToken` from the JSON response. You need it for step 4 and 5.
+Save the `claimToken` from the JSON response. You need it for step 5 and 6.
 
 ### Step 2: Read project conventions
 
@@ -49,23 +49,64 @@ git commit -m "task: <brief description of what you did>"
 
 In shared workspace mode (single workspace, no worktrees), be careful not to overwrite other workers' uncommitted changes. If there are no changes to commit (e.g., read-only analysis task), skip this step.
 
-The team leader monitors worker health and heartbeats in the monitoring loop.
+### Step 4: Self-heartbeat and progress updates
 
-### Step 4: On completion
+After each significant action (file edit, test run, major tool use), update your heartbeat so the leader can track your health:
 
-When the task is done, report completion:
+```bash
+omc team api update-worker-heartbeat --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}","pid":'$$',"turn_count":<N>,"alive":true}' --json
+```
+
+Increment `turn_count` with each call. This mirrors the native worker hook behavior and enables:
+- Accurate alive detection (leader no longer relies solely on tmux pane PID polling)
+- Turn count tracking for monitoring dashboards
+- Faster dead-worker detection
+
+### Step 5: On completion
+
+When the task is done, report completion and notify the leader you are idle:
 
 ```bash
 omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","from":"in_progress","to":"completed","claim_token":"YOUR_CLAIM_TOKEN","result":"Summary: <what you did>\nVerification: <how you verified it>\nSubagent skip reason: <why no nested worker was needed/allowed>"}' --json
 ```
 
-### Step 5: On failure
+Then notify the leader you are idle and ready for the next assignment:
+
+```bash
+omc team api send-message --input '{"team_name":"{{TEAM_NAME}}","from_worker":"{{WORKER_NAME}}","to_worker":"leader-fixed","body":"IDLE: task {{TASK_ID}} completed, ready for next assignment"}' --json
+```
+
+### Step 6: On failure
 
 If the task cannot be completed, report failure:
 
 ```bash
 omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","from":"in_progress","to":"failed","claim_token":"YOUR_CLAIM_TOKEN","error":"REASON_FOR_FAILURE"}' --json
 ```
+
+### Step 7: On shutdown signal
+
+Check if the leader has requested a graceful shutdown:
+
+```bash
+omc team api read-shutdown-ack --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}"}' --json
+```
+
+If shutdown is requested:
+1. Commit any pending changes (`git add -- <paths> && git commit -m "task: partial work before shutdown"`)
+2. Release the task claim if still in progress:
+
+```bash
+omc team api release-task-claim --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","worker":"{{WORKER_NAME}}"}' --json
+```
+
+3. Send final heartbeat with `alive: false`:
+
+```bash
+omc team api update-worker-heartbeat --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}","pid":'$$',"turn_count":<N>,"alive":false}' --json
+```
+
+4. Exit cleanly
 
 ## Communication
 
@@ -93,6 +134,9 @@ omc team api mailbox-mark-delivered --input '{"team_name":"{{TEAM_NAME}}","worke
 ## Important Rules
 1. You MUST claim the task before starting work
 2. You MUST call transition-task-status before exiting (completed or failed)
-3. Do NOT write done.json or edit task files directly
-4. Do NOT stop after the first response — keep working until the task is complete
-5. ACK/progress replies are not a stop signal — keep executing
+3. You MUST update your heartbeat after each significant action (Step 4)
+4. You MUST notify the leader when idle after task completion (Step 5)
+5. Do NOT write done.json or edit task files directly
+6. Do NOT stop after the first response — keep working until the task is complete
+7. ACK/progress replies are not a stop signal — keep executing
+8. On shutdown signal, commit partial work, release claims, and exit cleanly (Step 7)

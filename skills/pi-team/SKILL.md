@@ -289,21 +289,53 @@ tmux send-keys -t "$PANE_ID" "" Enter
 
 You MUST actively monitor the team until all tasks reach a terminal state (completed or failed).
 
-**Poll every 30 seconds:**
+**Use `get-summary` for a complete team snapshot in one call:**
 
 ```bash
-omc team status "$TEAM_NAME"
-omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
+SUMMARY=$(omc team api get-summary --input '{"team_name":"'"$TEAM_NAME"'"}' --json)
 ```
 
-**For each pi worker, update heartbeat:**
+This returns all workers' alive status, heartbeat data, current tasks, and task stats — replacing multiple individual API calls.
 
-> The leader updates heartbeats for pi workers. Pi workers should **NOT** self-heartbeat.
+**Poll every 30 seconds.** On each poll:
+
+#### 5a: Save monitor snapshot
+
+Persist the current state for session recovery after compaction:
+
+```bash
+# Build and save monitor snapshot
+TASKS_JSON=$(omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json)
+SNAPSHOT=$(node -e '
+const tasks = JSON.parse(process.argv[1]).data?.tasks || [];
+const snap = {
+  taskStatusById: {},
+  workerAliveByName: {},
+  workerStateByName: {},
+  workerTurnCountByName: {},
+  workerTaskIdByName: {},
+  mailboxNotifiedByMessageId: {},
+  completedEventTaskIds: {}
+};
+tasks.forEach(t => {
+  snap.taskStatusById[t.id] = t.status;
+  if (t.status === "completed") snap.completedEventTaskIds[t.id] = true;
+});
+process.stdout.write(JSON.stringify(snap));
+' -- "$TASKS_JSON")
+
+omc team api write-monitor-snapshot --input '{"team_name":"'"$TEAM_NAME"'","snapshot":'"$SNAPSHOT"'}' --json
+```
+
+#### 5b: Check pi worker liveness
+
+Pi workers now self-heartbeat (Step 4 in bootstrap). The leader supplements with tmux pane PID checks:
 
 ```bash
 PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null)
 
 if [ -n "$PANE_PID" ]; then
+  # Pane alive — leader supplements heartbeat (pi worker also self-heartbeats)
   HEARTBEAT_COUNT=$(( ${HEARTBEAT_COUNT:-0} + 1 ))
   omc team api update-worker-heartbeat --input '{
     "team_name": "'"$TEAM_NAME"'",
@@ -313,7 +345,26 @@ if [ -n "$PANE_PID" ]; then
     "alive": true
   }' --json
 else
-  # Pane dead — check if task still in_progress
+  # Pane dead — check worker's self-heartbeat before declaring dead
+  WORKER_HB=$(omc team api read-worker-heartbeat --input '{"team_name":"'"$TEAM_NAME"'","worker":"'"$WORKER_NAME"'"}' --json)
+  WORKER_ALIVE=$(printf "%s" "$WORKER_HB" | node -e '
+    const fs = require("fs");
+    const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
+    const line = lines.find((v) => v.trim().startsWith("{"));
+    if (!line) { process.stdout.write("false"); process.exit(0); }
+    const data = JSON.parse(line);
+    const hb = data.data?.heartbeat;
+    if (!hb || !hb.lastPollAt) { process.stdout.write("false"); process.exit(0); }
+    const age = Date.now() - new Date(hb.lastPollAt).getTime();
+    process.stdout.write(age < 60000 ? "true" : "false");
+  ')
+
+  if [ "$WORKER_ALIVE" = "true" ]; then
+    echo "INFO: pane dead but worker heartbeat recent — process may have reparented"
+    continue
+  fi
+
+  # Truly dead — check task status
   TASK_STATUS=$(omc team api read-task --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'"}' --json | node -e '
 const fs = require("fs");
 const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
@@ -324,6 +375,10 @@ process.stdout.write(data.data?.task?.status || "unknown");
 
   if [ "$TASK_STATUS" = "in_progress" ]; then
     RESTART_COUNT=$(( ${RESTART_COUNT:-0} + 1 ))
+
+    # Log respawn event
+    omc team api append-event --input '{"team_name":"'"$TEAM_NAME"'","type":"worker_respawned","worker":"'"$WORKER_NAME"'","task_id":"'"$TASK_ID"'","reason":"pane dead, attempt '"$RESTART_COUNT"'"}' --json
+
     if [ "$RESTART_COUNT" -gt 3 ]; then
       echo "ERROR: pi worker dead after 3 respawn attempts"
       CLAIM_TOKEN=$(omc team api claim-task --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","worker":"'"$WORKER_NAME"'"}' --json | node -e '
@@ -337,6 +392,7 @@ process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "
         echo "ERROR: failed to claim task before marking failed"; continue
       fi
       omc team api transition-task-status --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","from":"in_progress","to":"failed","claim_token":"'"$CLAIM_TOKEN"'","error":"pi worker crashed repeatedly"}' --json
+      omc team api append-event --input '{"team_name":"'"$TEAM_NAME"'","type":"task_failed","worker":"'"$WORKER_NAME"'","task_id":"'"$TASK_ID"'","reason":"exhausted 3 respawn attempts"}' --json
       continue
     fi
     echo "WARN: pi worker dead — respawning (attempt $RESTART_COUNT)"
@@ -351,6 +407,14 @@ process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "
 fi
 ```
 
+#### 5c: Log completion events
+
+When a task transitions to terminal state, log it:
+
+```bash
+omc team api append-event --input '{"team_name":"'"$TEAM_NAME"'","type":"task_completed","worker":"'"$WORKER_NAME"'","task_id":"'"$TASK_ID"'"}' --json
+```
+
 **Terminal condition:** All tasks must be completed or failed.
 
 ### Phase 6: Report and Cleanup
@@ -359,7 +423,7 @@ When all tasks are terminal:
 
 1. **Collect results:**
 ```bash
-omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
+omc team api get-summary --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 ```
 
 2. **Report to user:**
@@ -372,9 +436,29 @@ omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 | codex (worker-1) | Task 2 | ✅ completed | Reviewed security |
 ```
 
-3. **Cleanup:**
+3. **Graceful shutdown:**
+   - Request each pi worker to shut down cleanly
+   - Wait for acknowledgment
+   - Then force shutdown and clean up
+
 ```bash
+# Request graceful shutdown from pi workers
+for WORKER_NAME in $PI_WORKER_NAMES; do
+  omc team api write-shutdown-request --input '{
+    "team_name": "'"$TEAM_NAME"'",
+    "worker": "'"$WORKER_NAME"'",
+    "requested_by": "leader-fixed"
+  }' --json
+  # Give worker a few seconds to ack
+  sleep 3
+  omc team api read-shutdown-ack --input '{"team_name":"'"$TEAM_NAME"'","worker":"'"$WORKER_NAME"'"}' --json
+done
+
+# Force shutdown remaining
 omc team shutdown "$TEAM_NAME" --force
+
+# Final cleanup — remove orphan state
+omc team api orphan-cleanup --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 ```
 
 ## Error Reference
@@ -390,6 +474,8 @@ omc team shutdown "$TEAM_NAME" --force
 | `worker_not_found` on claim | Worker not in manifest.json | Verify Phase 4c ran before 4d |
 | `write-worker-inbox` fails | Worker directory missing | Verify write-worker-identity ran first |
 | Bootstrap template not found | PLUGIN_ROOT misresolved | Ensure plugin is installed correctly |
+| `orphan_cleanup_blocked` | Worktree recovery evidence present | Pass `acknowledge_lost_worktree_recovery=true` after manual cleanup |
+| Pane dead but heartbeat recent | Process reparented | Non-fatal — worker still alive via self-heartbeat |
 
 ## Edge Cases
 

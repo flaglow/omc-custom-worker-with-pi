@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `when_to_use` frontmatter to both skills for improved auto-detection
 - `shell: bash` explicit declaration in both skills
 - `arguments` field in pi-team SKILL.md for named parameter access
+- **Pi worker self-heartbeat** (bootstrap Step 4) — mirrors native worker hook behavior
+- **Idle notification** — pi workers notify leader after task completion
+- **Graceful shutdown protocol** (bootstrap Step 7) — `write-shutdown-request` / `read-shutdown-ack`
+- **Monitor snapshot** — leader persists team state via `write-monitor-snapshot` each poll
+- **Audit event logging** — `append-event` for worker respawn, task completion, task failure
+- **Dual heartbeat detection** — leader checks worker self-heartbeat before declaring dead
+- **`get-summary`** for single-call team status (replaces multiple API calls)
+- **`orphan-cleanup`** for safe post-shutdown state removal
 
 ### Changed
 - **BREAKING**: Replaced manual `CLAUDE_PLUGIN_ROOT`/`OMC_PLUGIN_ROOT`/git fallback chain with standard `${CLAUDE_PLUGIN_ROOT}` provided by Claude Code runtime
