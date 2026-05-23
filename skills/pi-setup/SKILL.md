@@ -111,7 +111,7 @@ Ask the user:
 
 After the user selects a provider, show available models:
 ```bash
-pi --list-models <provider> 2>&1
+pi --list-models "<provider>" 2>&1
 ```
 
 **"Select a default model for pi-<provider>:"**
@@ -127,17 +127,43 @@ Validate the worker name (must match `^pi-[a-z0-9][a-z0-9-]*$`):
 - Must use lowercase alphanumeric characters and hyphens only (no uppercase, underscores, spaces, or special characters)
 - Must not conflict with existing workers or reserved names (`claude`, `codex`, `gemini`)
 
+Also validate:
+- Provider and model must be non-empty strings
+- Existing pi-workers.json is schema-validated (version field present, workers is an object)
+
 Save the worker to `~/.claude/pi-workers.json`:
 
 ```bash
 # Save and merge worker configuration
+# Values passed via process.argv for shell safety (no inline interpolation)
 node -e '
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const configPath = path.join(process.env.HOME, ".claude/pi-workers.json");
 const workerName = process.argv[2];
 const provider = process.argv[3];
 const model = process.argv[4];
+
+const RESERVED_SUFFIXES = ["claude", "codex", "gemini"];
+
+// Validate worker name format
+if (!workerName || !/^pi-[a-z0-9][a-z0-9-]*$/.test(workerName)) {
+  console.error("Invalid worker name: must match ^pi-[a-z0-9][a-z0-9-]*$");
+  process.exit(1);
+}
+if (RESERVED_SUFFIXES.includes(workerName.slice(3))) {
+  console.error("Worker name suffix is reserved: " + workerName.slice(3));
+  process.exit(1);
+}
+if (!provider || typeof provider !== "string" || !provider.trim()) {
+  console.error("Provider must be a non-empty string");
+  process.exit(1);
+}
+if (!model || typeof model !== "string" || !model.trim()) {
+  console.error("Model must be a non-empty string");
+  process.exit(1);
+}
 
 try {
   let config = { version: 1, workers: {} };
@@ -145,9 +171,23 @@ try {
     const raw = fs.readFileSync(configPath, "utf8");
     if (raw.trim()) {
       config = JSON.parse(raw);
+      // JSON schema validation
+      if (typeof config.version === "undefined") {
+        console.error("Invalid pi-workers.json: missing version field");
+        process.exit(1);
+      }
+      if (typeof config.workers !== "object" || config.workers === null || Array.isArray(config.workers)) {
+        console.error("Invalid pi-workers.json: workers must be an object");
+        process.exit(1);
+      }
     }
   }
-  
+
+  // Warn if overwriting existing worker
+  if (config.workers[workerName]) {
+    console.warn("WARNING: Worker \"" + workerName + "\" already exists. Overwriting.");
+  }
+
   if (!config.workers) config.workers = {};
   config.workers[workerName] = {
     provider,
@@ -157,13 +197,17 @@ try {
   };
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  // Atomic write: temp file then rename to target
+  const tmpPath = path.join(os.tmpdir(), "pi-workers-" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".tmp");
+  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n");
+  fs.chmodSync(tmpPath, 0o600);
+  fs.renameSync(tmpPath, configPath);
   console.log("Successfully registered " + workerName);
 } catch (e) {
   console.error("Error updating pi-workers.json:", e.message);
   process.exit(1);
 }
-' '<worker-name>' '<provider>' '<model>'
+' -- '<worker-name>' '<provider>' '<model>'
 ```
 
 Also update pi's own settings if this is the first worker or the user confirms:
@@ -233,7 +277,7 @@ try {
   console.error("Error updating settings.json:", e.message);
   process.exit(1);
 }
-' '<provider>' '<model>'
+' -- '<provider>' '<model>'
 
 ```
 
@@ -301,5 +345,10 @@ When a user specifies a worker like `pi-zai` or `pi-zai/glm-5-turbo`:
 | `Unexpected token ... in JSON` | Invalid JSON in `pi-workers.json` | Fix or delete the corrupted file |
 | `Worker name must start with pi-` | Invalid name format | Use names like `pi-zai`, `pi-openai` |
 | `Worker pi-zai already exists` | Duplicate name | Use a different name or remove existing first |
+| `Invalid pi-workers.json: missing version field` | Corrupted config file | Delete or fix `~/.claude/pi-workers.json` |
+| `Invalid pi-workers.json: workers must be an object` | Corrupted config file | Delete or fix `~/.claude/pi-workers.json` |
+| `Worker name suffix is reserved` | Reserved name used | Choose a name that does not use `claude`, `codex`, or `gemini` suffix |
+| `Provider must be a non-empty string` | Empty provider | Provide a valid provider name |
+| `Model must be a non-empty string` | Empty model | Provide a valid model name |
 | `Provider not found` | Invalid provider name | Use provider from `pi --list-models` output |
-| `Model not found` | Invalid model for provider | Check `pi --list-models <provider>` |
+| `Model not found` | Invalid model for provider | Check `pi --list-models "<provider>"` |
