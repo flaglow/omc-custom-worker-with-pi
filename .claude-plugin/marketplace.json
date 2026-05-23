@@ -9,10 +9,6 @@
     {
       "name": "omc-custom-worker-with-pi",
       "description": "Extend oh-my-claudecode teams with pi CLI workers. Use any pi-supported LLM provider (zai, openai, gemini, etc.) as a team worker alongside native claude, codex, and gemini workers.",
-      "version": "0.2.0",
-      "author": {
-        "name": "flaglow"
-      },
       "license": "MIT",
       "source": "./",
       "category": "multi-agent",
@@ -27,6 +23,5 @@
         "custom-worker"
       ]
     }
-  ],
-  "version": "0.2.0"
+  ]
 }
