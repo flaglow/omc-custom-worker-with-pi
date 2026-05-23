@@ -18,7 +18,7 @@ You MUST execute these steps in order. Do NOT skip any step.
 omc team api claim-task --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","worker":"{{WORKER_NAME}}"}' --json
 ```
 
-Save the `claim_token` from the JSON response. You need it for step 4 and 5.
+Save the `claimToken` from the JSON response. You need it for step 4 and 5.
 
 ### Step 2: Read project conventions
 
@@ -49,20 +49,14 @@ git commit -m "task: <brief description of what you did>"
 
 In shared workspace mode (single workspace, no worktrees), be careful not to overwrite other workers' uncommitted changes. If there are no changes to commit (e.g., read-only analysis task), skip this step.
 
-While working, periodically update your status (every 2-3 minutes):
-
-```bash
-omc team api update-worker-heartbeat --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}","pid":PID_NUMBER,"turn_count":TURN_NUMBER,"alive":true}' --json
-```
-
-Replace PID_NUMBER with your process ID and TURN_NUMBER with an incrementing counter (start at 1).
+The team leader monitors worker health and heartbeats in the monitoring loop.
 
 ### Step 4: On completion
 
 When the task is done, report completion:
 
 ```bash
-omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","from":"in_progress","to":"completed","claim_token":"YOUR_CLAIM_TOKEN","result":"Summary: WHAT_YOU_DID\nVerification: TESTS_OR_CHECKS_RUN"}' --json
+omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_id":"{{TASK_ID}}","from":"in_progress","to":"completed","claim_token":"YOUR_CLAIM_TOKEN","result":"Summary: <what you did>\nVerification: <how you verified it>\nSubagent skip reason: <why no nested worker was needed/allowed>"}' --json
 ```
 
 ### Step 5: On failure
@@ -98,8 +92,7 @@ omc team api mailbox-mark-delivered --input '{"team_name":"{{TEAM_NAME}}","worke
 
 ## Important Rules
 1. You MUST claim the task before starting work
-2. You MUST update heartbeat periodically while working
-3. You MUST call transition-task-status before exiting (completed or failed)
-4. Do NOT write done.json or edit task files directly
-5. Do NOT stop after the first response — keep working until the task is complete
-6. ACK/progress replies are not a stop signal — keep executing
+2. You MUST call transition-task-status before exiting (completed or failed)
+3. Do NOT write done.json or edit task files directly
+4. Do NOT stop after the first response — keep working until the task is complete
+5. ACK/progress replies are not a stop signal — keep executing
