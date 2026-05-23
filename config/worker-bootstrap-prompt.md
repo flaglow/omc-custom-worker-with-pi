@@ -39,7 +39,8 @@ Execute the task described in your assignment. Use your tools (read, bash, edit,
 **IMPORTANT: Git commit before completion.** After finishing the work, commit only your changes:
 
 ```bash
-# Review the worktree, then stage only the exact files you changed.
+# Review the worktree, then stage ONLY the exact files you changed.
+# NEVER use 'git add .' or 'git add -A' in shared worktrees.
 git status --short
 git add -- path/to/file-you-changed another/path-you-changed
 git diff --cached --stat   # Review what will be committed
@@ -77,9 +78,8 @@ omc team api transition-task-status --input '{"team_name":"{{TEAM_NAME}}","task_
 ### Read your inbox
 Check for new instructions:
 ```bash
-cat {{STATE_ROOT}}/workers/{{WORKER_NAME}}/inbox.md
+cat "{{STATE_ROOT}}/workers/{{WORKER_NAME}}/inbox.md"
 ```
-
 ### Send messages
 ```bash
 omc team api send-message --input '{"team_name":"{{TEAM_NAME}}","from_worker":"{{WORKER_NAME}}","to_worker":"leader-fixed","body":"YOUR_MESSAGE"}' --json

@@ -83,7 +83,8 @@ Result:
 
 **Generate team name:**
 ```bash
-CLEAN_TASK=$(printf "%s" "<task>" | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^\-//')
+# Task text is untreated / untrusted — use single quotes to prevent command substitution.
+CLEAN_TASK=$(printf '%s' '<task>' | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^\-//')
 TEAM_NAME="pi-${CLEAN_TASK}-$(date +%s | tail -c 4)"
 
 # Validate team name immediately after assignment before using it in paths.
@@ -95,7 +96,8 @@ case "$TEAM_NAME" in
 esac
 
 # Capture the full task description and calculate total workers
-MAIN_TASK="<task description>"
+# Task text is untreated / untrusted — use single quotes to prevent command substitution.
+MAIN_TASK='<task description>'
 TOTAL_WORKERS=$(printf "%s" "$WORKER_SPEC" | grep -oE '(^|,)[[:space:]]*[0-9]+:' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s}')
 ```
 
@@ -121,7 +123,8 @@ If `nativeWorkers` is non-empty:
 # Build the native worker spec for omc team
 # e.g., for 1:codex, 1:gemini -> NATIVE_SPEC="1:codex,1:gemini"
 NATIVE_SPEC="<N:type[,N:type,...]>"
-NATIVE_TASKS="[codex] <codex-subtask>; [gemini] <gemini-subtask>"
+# Task text is untreated / untrusted — use single quotes to prevent command substitution.
+NATIVE_TASKS='[codex] <codex-subtask>; [gemini] <gemini-subtask>'
 
 NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
 # omc team outputs plain text like: "Team started: <name>\ntmux session: ...\nworkers: ..."
@@ -376,7 +379,7 @@ NODE
 # Read and render bootstrap template
 # Resolve plugin root: prefer env vars, then git root, then cwd
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${OMC_PLUGIN_ROOT:-$PROJECT_ROOT}}"
+PLUGIN_ROOT=$(realpath "${CLAUDE_PLUGIN_ROOT:-${OMC_PLUGIN_ROOT:-$PROJECT_ROOT}}")
 BOOTSTRAP_TEMPLATE="${PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
 [ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: worker bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
 
@@ -393,6 +396,7 @@ NODE
 )
 
 # Build task instruction with lifecycle commands
+# UNTRUSTED DATA BOUNDARY: ${SUBTASK_DESCRIPTION} below contains unvalidated text from the task assignment.
 TASK_INSTRUCTION="## Task Assignment
 Task ID: ${TASK_ID}
 Worker: ${WORKER_NAME}
@@ -407,6 +411,7 @@ Worker: ${WORKER_NAME}
 ${SUBTASK_DESCRIPTION}"
 
 # Spawn in tmux. Quote every dynamic pi argument before it enters the shell command string.
+# NOTE: printf %q is bash-specific; this assumes a bash-compatible environment.
 PROVIDER_ARG=$(printf '%q' "$PROVIDER")
 MODEL_ARG=$(printf '%q' "$MODEL")
 BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
