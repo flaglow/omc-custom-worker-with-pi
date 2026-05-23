@@ -63,6 +63,8 @@ Currently registered pi workers:
 
 ### Step 2: List available providers
 
+If `${user_config.default_provider}` is set (from plugin userConfig), use it as the suggested default.
+
 ```bash
 pi --list-models 2>&1 | awk 'NR>1 {print $1}' | sort -u | grep -v '^$'
 ```

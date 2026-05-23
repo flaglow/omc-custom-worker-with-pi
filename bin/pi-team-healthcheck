@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pi-team-healthcheck — check if all pi workers in a team are alive
+# Usage: pi-team-healthcheck <team-name>
+set -euo pipefail
+
+TEAM_NAME="${1:?Usage: pi-team-healthcheck <team-name>}"
+STATE_ROOT=".omc/state/team/${TEAM_NAME}"
+
+if [ ! -d "$STATE_ROOT" ]; then
+  echo "ERROR: team state not found at $STATE_ROOT"
+  exit 1
+fi
+
+CONFIG="${STATE_ROOT}/config.json"
+if [ ! -f "$CONFIG" ]; then
+  echo "ERROR: config.json not found"
+  exit 1
+fi
+
+# Count workers
+WORKER_COUNT=$(node -e "
+const c = JSON.parse(require('fs').readFileSync('$CONFIG', 'utf8'));
+const workers = (c.workers || []).filter(w => w.worker_cli === 'pi');
+process.stdout.write(String(workers.length));
+")
+
+if [ "$WORKER_COUNT" -eq 0 ]; then
+  echo "No pi workers found in team ${TEAM_NAME}"
+  exit 0
+fi
+
+echo "Checking ${WORKER_COUNT} pi worker(s) in team ${TEAM_NAME}..."
+
+# Check each worker's pane
+node -e "
+const c = JSON.parse(require('fs').readFileSync('$CONFIG', 'utf8'));
+const workers = (c.workers || []).filter(w => w.worker_cli === 'pi');
+for (const w of workers) {
+  console.log('  ' + w.name + ': pane=' + (w.pane_id || 'N/A') + ' provider=' + (w.provider || '?') + ' model=' + (w.model || '?'));
+}
+"
+
+# Try tmux check
+ALIVE=0
+DEAD=0
+node -e "
+const c = JSON.parse(require('fs').readFileSync('$CONFIG', 'utf8'));
+(c.workers || []).filter(w => w.worker_cli === 'pi').forEach(w => {
+  if (w.pane_id && w.pane_id !== 'pending') {
+    try {
+      require('child_process').execSync('tmux display-message -t ' + w.pane_id + ' -p \"#{pane_pid}\"', {stdio: 'pipe'});
+      console.log('  ✓ ' + w.name + ': alive');
+    } catch {
+      console.log('  ✗ ' + w.name + ': dead (pane ' + w.pane_id + ')');
+    }
+  } else {
+    console.log('  ? ' + w.name + ': no pane assigned');
+  }
+});
+"
+
+echo "Done."

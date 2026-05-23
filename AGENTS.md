@@ -5,7 +5,7 @@ This project is a Claude Code plugin that adds pi CLI workers (any LLM provider)
 ## Structure
 
 ```
-.claude-plugin/plugin.json       — Plugin metadata and skill references
+.claude-plugin/plugin.json       — Plugin metadata, skill references, userConfig
 .claude-plugin/marketplace.json  — Marketplace listing
 skills/pi-setup/
   SKILL.md                       — Worker setup/configuration skill
@@ -23,6 +23,9 @@ skills/pi-team/
     update-pane-id.js            — Update pane_id after tmux spawn
     build-api-input.js           — Build JSON input for omc team api calls
 config/worker-bootstrap-prompt.md — System prompt template for pi workers
+hooks/hooks.json                 — SessionStart hook: pi CLI availability check
+bin/pi-team-healthcheck          — Quick team worker health check utility
+CHANGELOG.md                     — Version history
 README.md                        — User-facing documentation
 ```
 
@@ -33,13 +36,14 @@ README.md                        — User-facing documentation
 - **omc vs omx**: `omc` and `omx` are aliases. This plugin uses `omc` throughout.
 - **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json.
 - **Prerequisite gating**: pi CLI and pi-workers.json checks are skipped for all-native teams.
-- **Plugin root resolution**: `CLAUDE_PLUGIN_ROOT` → `OMC_PLUGIN_ROOT` → git root → cwd fallback chain. Validated with `realpath` before loading bootstrap to prevent poisoned env injection.
+- **Plugin root resolution**: Uses standard `${CLAUDE_PLUGIN_ROOT}` provided by Claude Code at runtime. No manual fallback chain needed.
 - **Shell interpolation safety**: Values passed to `node -e` use `process.argv` or env vars, never inline string interpolation. Task text is assigned via single-quoted shell variables or `printf %q` to prevent command substitution from untrusted input.
 - **Git commit protocol**: Bootstrap instructs pi workers to stage only their explicitly changed files (`git add -- <paths>`, never `git add -A`) before committing, to avoid contaminating shared-workspace worktrees with other workers' or user changes.
 - **claim_token required for failure transitions**: `omc team api transition-task-status` always requires a `claim_token`. The dead-worker exhausted-respawn path must call `claim-task` first to obtain a token before marking the task `failed`.
 - **Template variables**: `{{TEAM_NAME}}`, `{{WORKER_NAME}}`, `{{TASK_ID}}`, `{{CWD}}`, `{{STATE_ROOT}}` — substituted via Node.js in SKILL.md Phase 4d.
 - **Bootstrap reads AGENTS.md**: Pi worker bootstrap prompt (Step 2) reads `AGENTS.md` from the project root before executing the task, so pi workers pick up project-level conventions and constraints automatically.
 - **External scripts**: SKILL.md references scripts via `${CLAUDE_SKILL_DIR}/scripts/` for portability across personal, project, and plugin installs. Scripts use `process.argv` or env vars — never inline shell interpolation of untrusted data.
+- **userConfig**: Plugin declares `default_provider` and `default_model` via `plugin.json` `userConfig`. Values are accessible as `${user_config.default_provider}` in skill content.
 
 ## Testing
 
@@ -56,3 +60,5 @@ Run integration tests against `omc team api` operations:
 - Team state in `.omc/state/team/<team-name>/`
 - Skills use `disable-model-invocation: true` to prevent accidental execution
 - Skills declare `allowed-tools` for frictionless operation
+- All plugin-relative paths use `${CLAUDE_PLUGIN_ROOT}` (standard Claude Code variable)
+- Skill-local scripts use `${CLAUDE_SKILL_DIR}/scripts/`

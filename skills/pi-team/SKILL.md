@@ -242,9 +242,7 @@ PANE_ID="pending" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" \
 
 ```bash
 # Resolve bootstrap template
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-PLUGIN_ROOT=$(realpath "${CLAUDE_PLUGIN_ROOT:-${OMC_PLUGIN_ROOT:-$PROJECT_ROOT}}")
-BOOTSTRAP_TEMPLATE="${PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
+BOOTSTRAP_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
 [ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
 
 # Render template with variables
@@ -391,7 +389,7 @@ omc team shutdown "$TEAM_NAME" --force
 | `claim_token` error | Task already claimed | Skip to next available task |
 | `worker_not_found` on claim | Worker not in manifest.json | Verify Phase 4c ran before 4d |
 | `write-worker-inbox` fails | Worker directory missing | Verify write-worker-identity ran first |
-| Bootstrap template not found | PLUGIN_ROOT misresolved | Set CLAUDE_PLUGIN_ROOT env var |
+| Bootstrap template not found | PLUGIN_ROOT misresolved | Ensure plugin is installed correctly |
 
 ## Edge Cases
 

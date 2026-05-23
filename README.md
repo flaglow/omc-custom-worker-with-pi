@@ -63,7 +63,7 @@
 ## Plugin Structure
 
 ```
-.claude-plugin/plugin.json       — Plugin manifest
+.claude-plugin/plugin.json       — Plugin manifest (with userConfig)
 .claude-plugin/marketplace.json  — Marketplace listing
 skills/pi-setup/
   SKILL.md                       — Worker configuration skill
@@ -72,9 +72,12 @@ skills/pi-team/
   SKILL.md                       — Team orchestration skill
   scripts/                       — Orchestration helper scripts
 config/worker-bootstrap-prompt.md — System prompt template for pi workers
+hooks/hooks.json                 — SessionStart pi CLI check
+bin/pi-team-healthcheck          — Quick team health check utility
+CHANGELOG.md                     — Version history
 ```
 
-Skills use `${CLAUDE_SKILL_DIR}/scripts/` for portable script references. Both skills declare `disable-model-invocation: true` (user-invoked only) and `allowed-tools` for frictionless execution.
+Skills use `${CLAUDE_SKILL_DIR}/scripts/` for portable script references and `${CLAUDE_PLUGIN_ROOT}` for plugin root paths. Both skills declare `disable-model-invocation: true` (user-invoked only) and `allowed-tools` for frictionless execution.
 
 ## Setup Flow (`/pi-setup`)
 

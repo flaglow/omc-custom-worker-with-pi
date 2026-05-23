@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v pi >/dev/null 2>&1 || echo 'WARN: pi CLI not installed. Run /omc-custom-worker-with-pi:pi-setup to configure workers.'"
+          }
+        ]
+      }
+    ]
+  }
+}

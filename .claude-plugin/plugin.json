@@ -1,6 +1,7 @@
 {
   "name": "omc-custom-worker-with-pi",
-  "version": "0.1.5",
+  "displayName": "OMC Custom Worker with Pi",
+  "version": "0.2.0",
   "description": "Extend oh-my-claudecode teams with pi CLI workers. Use any pi-supported LLM provider (zai, openai, gemini, etc.) as a team worker alongside native claude, codex, and gemini workers.",
   "engines": {
     "claude-code": ">=1.0.0",
@@ -27,5 +28,19 @@
   "skills": [
     "./skills/pi-setup/",
     "./skills/pi-team/"
-  ]
+  ],
+  "userConfig": {
+    "default_provider": {
+      "type": "string",
+      "title": "Default Pi Provider",
+      "description": "The default LLM provider for pi workers (e.g., zai, openai, gemini). Run 'pi --list-models' to see available providers.",
+      "required": false
+    },
+    "default_model": {
+      "type": "string",
+      "title": "Default Pi Model",
+      "description": "The default model ID for the provider (e.g., glm-5.1, gpt-5). Leave empty to use the provider's default.",
+      "required": false
+    }
+  }
 }
