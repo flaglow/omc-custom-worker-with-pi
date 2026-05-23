@@ -24,6 +24,8 @@ Save the `claim_token` from the JSON response. You need it for step 3 and 4.
 
 Execute the task described in your assignment. Use your tools (read, bash, edit, write) to complete the work.
 
+**IMPORTANT: Sandbox/worktree isolation.** Before modifying files or committing, determine whether you are in an isolated worktree or a shared workspace. If isolation is unclear, treat the workspace as shared: edit only assigned files, never stage or commit files you did not intentionally change, and do not run destructive git commands such as reset, checkout, or clean against shared paths.
+
 **IMPORTANT: Git commit before completion.** After finishing the work, commit only your changes:
 
 ```bash

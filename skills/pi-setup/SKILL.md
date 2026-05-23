@@ -60,7 +60,46 @@ pi --list-models 2>&1 | awk 'NR>1 {print $1}' | sort -u | grep -v '^$'
 
 Also check pi's current default configuration:
 ```bash
-cat ~/.pi/agent/settings.json 2>/dev/null
+node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
+
+function isSecretKey(key) {
+  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normalized === 'key' ||
+    normalized.includes('apikey') ||
+    normalized.includes('token') ||
+    normalized.includes('secret') ||
+    normalized.includes('password') ||
+    normalized.includes('credential') ||
+    normalized.includes('authorization');
+}
+
+function redact(value) {
+  if (Array.isArray(value)) return value.map(redact);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      isSecretKey(key) ? '<redacted>' : redact(child)
+    ])
+  );
+}
+
+try {
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  console.log(JSON.stringify(redact(settings), null, 2));
+} catch (e) {
+  if (e.code === 'ENOENT') {
+    console.error('~/.pi/agent/settings.json not found');
+    process.exit(0);
+  }
+  console.error('Error reading settings.json:', e.message);
+  process.exit(1);
+}
+NODE
 ```
 
 ### Step 3: Create a custom worker (repeat loop)
@@ -82,11 +121,11 @@ After the user selects a model:
 
 **"Worker name (default: pi-<provider>):"**
 
-Validate the worker name:
+Validate the worker name (must contain only safe characters):
 - Must start with `pi-` (e.g., `pi-myworker`)
 - Suffix after `pi-` must be at least 1 character long
-- Must be lowercase alphanumeric + hyphens only
-- Must not conflict with existing workers or reserved names (claude, codex, gemini)
+- Must be lowercase alphanumeric + hyphens only (no spaces, underscores, or special characters)
+- Must not conflict with existing workers or reserved names (`claude`, `codex`, `gemini`)
 
 Save the worker to `~/.claude/pi-workers.json`:
 
@@ -107,7 +146,46 @@ Save the worker to `~/.claude/pi-workers.json`:
 Also update pi's own settings if this is the first worker or the user confirms:
 ```bash
 # Read current settings
-cat ~/.pi/agent/settings.json
+node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
+
+function isSecretKey(key) {
+  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normalized === 'key' ||
+    normalized.includes('apikey') ||
+    normalized.includes('token') ||
+    normalized.includes('secret') ||
+    normalized.includes('password') ||
+    normalized.includes('credential') ||
+    normalized.includes('authorization');
+}
+
+function redact(value) {
+  if (Array.isArray(value)) return value.map(redact);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      isSecretKey(key) ? '<redacted>' : redact(child)
+    ])
+  );
+}
+
+try {
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  console.log(JSON.stringify(redact(settings), null, 2));
+} catch (e) {
+  if (e.code === 'ENOENT') {
+    console.error('~/.pi/agent/settings.json not found');
+    process.exit(0);
+  }
+  console.error('Error reading settings.json:', e.message);
+  process.exit(1);
+}
+NODE
 
 # Update defaultProvider and defaultModel (only if missing)
 node -e "
@@ -125,6 +203,7 @@ try {
 
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  fs.chmodSync(settingsPath, 0o600);
 } catch (e) {
   console.error('Error updating settings.json:', e.message);
   process.exit(1);

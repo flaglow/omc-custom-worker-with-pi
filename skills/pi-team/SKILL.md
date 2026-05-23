@@ -53,6 +53,7 @@ fi
 **Validate every pi worker referenced:**
 - Parse each `N:pi-{name}` token
 - Extract worker name (strip optional `/model` suffix)
+- **Validate worker name contains only safe characters** (alphanumeric, hyphens, underscores)
 - Look up `pi-{name}` in `~/.claude/pi-workers.json`
 - If not found: ERROR with suggestion to run `/pi-setup`
 
@@ -114,6 +115,12 @@ NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
 # omc team outputs plain text like: "Team started: <name>\ntmux session: ...\nworkers: ..."
 TEAM_NAME=$(printf "%s" "$NATIVE_OUTPUT" | grep -oP 'Team started: *\K.*')
 [ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name from output:\n$NATIVE_OUTPUT"; exit 1; }
+
+# Validate team name contains only safe characters
+if ! [[ "$TEAM_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
+  exit 1
+fi
 ```
 
 Use `--no-decompose` only when every native worker should receive the same task text.
@@ -244,6 +251,12 @@ const data = JSON.parse(line);
 process.stdout.write(String(data.data?.task?.id || ""));
 ')
 [ -n "$TASK_ID" ] || { echo "ERROR: unable to resolve created task id"; exit 1; }
+
+# Validate task id contains only safe characters
+if ! [[ "$TASK_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "ERROR: invalid task id '$TASK_ID' (contains unsafe characters)"
+  exit 1
+fi
 ```
 
 Do not write `tasks/task-*.json` directly. `omc team api create-task` creates the required task schema, including `version: 1` and `depends_on: []`.
