@@ -1,0 +1,31 @@
+{
+  "name": "omc-custom-worker-with-pi",
+  "version": "0.1.0",
+  "description": "Add pi CLI as a custom worker type to oh-my-claudecode teams. Use any pi-supported provider (zai, openai, etc.) alongside claude, codex, and gemini workers.",
+  "author": {
+    "name": "flaglow"
+  },
+  "repository": "https://github.com/flaglow/omc-custom-worker-with-pi",
+  "homepage": "https://github.com/flaglow/omc-custom-worker-with-pi",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "omc",
+    "oh-my-claudecode",
+    "pi",
+    "team",
+    "worker",
+    "multi-agent",
+    "zai",
+    "openai"
+  ],
+  "skills": [
+    "./skills/pi-setup/",
+    "./skills/pi-team/"
+  ],
+  "commands": [
+    "./commands/pi-setup.md",
+    "./commands/pi-team.md"
+  ]
+}

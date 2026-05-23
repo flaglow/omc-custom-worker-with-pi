@@ -1,0 +1,30 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "omc-custom-worker-with-pi",
+  "description": "Add pi CLI workers (zai, openai, any provider) to oh-my-claudecode teams alongside claude, codex, and gemini",
+  "owner": {
+    "name": "flaglow"
+  },
+  "plugins": [
+    {
+      "name": "omc-custom-worker-with-pi",
+      "description": "Extend oh-my-claudecode teams with pi CLI workers. Use any pi-supported LLM provider (zai, openai, gemini, etc.) as a team worker alongside native claude, codex, and gemini workers.",
+      "version": "0.1.0",
+      "author": {
+        "name": "flaglow"
+      },
+      "source": "./",
+      "category": "multi-agent",
+      "homepage": "https://github.com/flaglow/omc-custom-worker-with-pi",
+      "tags": [
+        "multi-agent",
+        "pi",
+        "team",
+        "worker",
+        "zai",
+        "custom-worker"
+      ]
+    }
+  ],
+  "version": "0.1.0"
+}
