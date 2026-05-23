@@ -1,7 +1,11 @@
 {
   "name": "omc-custom-worker-with-pi",
   "version": "0.1.5",
-  "description": "Add pi CLI as a custom worker type to oh-my-claudecode teams. Use any pi-supported provider (zai, openai, etc.) alongside claude, codex, and gemini workers.",
+  "description": "Extend oh-my-claudecode teams with pi CLI workers. Use any pi-supported LLM provider (zai, openai, gemini, etc.) as a team worker alongside native claude, codex, and gemini workers.",
+  "engines": {
+    "claude-code": ">=1.0.0",
+    "oh-my-claudecode": ">=4.4.0"
+  },
   "author": {
     "name": "flaglow"
   },
