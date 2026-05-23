@@ -131,18 +131,18 @@ Save the worker to `~/.claude/pi-workers.json`:
 
 ```bash
 # Save and merge worker configuration
-node -e "
-const fs = require('fs');
-const path = require('path');
-const configPath = path.join(process.env.HOME, '.claude/pi-workers.json');
-const workerName = '<worker-name>';
-const provider = '<provider>';
-const model = '<model>';
+node -e '
+const fs = require("fs");
+const path = require("path");
+const configPath = path.join(process.env.HOME, ".claude/pi-workers.json");
+const workerName = process.argv[2];
+const provider = process.argv[3];
+const model = process.argv[4];
 
 try {
   let config = { version: 1, workers: {} };
   if (fs.existsSync(configPath)) {
-    const raw = fs.readFileSync(configPath, 'utf8');
+    const raw = fs.readFileSync(configPath, "utf8");
     if (raw.trim()) {
       config = JSON.parse(raw);
     }
@@ -152,18 +152,18 @@ try {
   config.workers[workerName] = {
     provider,
     model,
-    binary: 'pi',
+    binary: "pi",
     createdAt: new Date().toISOString()
   };
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-  console.log('Successfully registered ' + workerName);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log("Successfully registered " + workerName);
 } catch (e) {
-  console.error('Error updating pi-workers.json:', e.message);
+  console.error("Error updating pi-workers.json:", e.message);
   process.exit(1);
 }
-"
+' '<worker-name>' '<provider>' '<model>'
 ```
 
 Also update pi's own settings if this is the first worker or the user confirms:
@@ -211,27 +211,29 @@ try {
 NODE
 
 # Update defaultProvider and defaultModel (only if missing)
-node -e "
-const fs = require('fs');
-const path = require('path');
-const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
+node -e '
+const fs = require("fs");
+const path = require("path");
+const settingsPath = path.join(process.env.HOME, ".pi/agent/settings.json");
 try {
   let settings = {};
   if (fs.existsSync(settingsPath)) {
-    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
   }
   // Only update if missing to avoid overwriting user's own defaults
-  if (!settings.defaultProvider) settings.defaultProvider = '<provider>';
-  if (!settings.defaultModel) settings.defaultModel = '<model>';
+  const provider = process.argv[2];
+  const model = process.argv[3];
+  if (!settings.defaultProvider) settings.defaultProvider = provider;
+  if (!settings.defaultModel) settings.defaultModel = model;
 
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   fs.chmodSync(settingsPath, 0o600);
 } catch (e) {
-  console.error('Error updating settings.json:', e.message);
+  console.error("Error updating settings.json:", e.message);
   process.exit(1);
 }
-"
+' '<provider>' '<model>'
 
 ```
 
