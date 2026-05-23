@@ -83,9 +83,10 @@ After the user selects a model:
 **"Worker name (default: pi-<provider>):"**
 
 Validate the worker name:
-- Must start with `pi-`
+- Must start with `pi-` (e.g., `pi-myworker`)
+- Suffix after `pi-` must be at least 1 character long
 - Must be lowercase alphanumeric + hyphens only
-- Must not conflict with existing workers or reserved names (claude, codex, gemini, cursor)
+- Must not conflict with existing workers or reserved names (claude, codex, gemini)
 
 Save the worker to `~/.claude/pi-workers.json`:
 
@@ -114,10 +115,19 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
-const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-settings.defaultProvider = '<provider>';
-settings.defaultModel = '<model>';
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+try {
+  let settings = {};
+  if (fs.existsSync(settingsPath)) {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  }
+  settings.defaultProvider = '<provider>';
+  settings.defaultModel = '<model>';
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+} catch (e) {
+  console.error('Error updating settings.json:', e.message);
+  process.exit(1);
+}
 "
 ```
 
@@ -179,7 +189,11 @@ When a user specifies a worker like `pi-zai` or `pi-zai/glm-5-turbo`:
 | Error | Cause | Fix |
 |---|---|---|
 | `pi: command not found` | pi CLI not installed | `npm install -g @earendil-works/pi-coding-agent` |
+| `node: command not found` | Node.js not available | Install Node.js |
 | `~/.pi/agent/settings.json not found` | pi not initialized | Run `pi` once interactively |
+| `~/.claude/ directory missing` | omc not initialized | Run `omc` once to initialize |
+| `Unexpected token ... in JSON` | Invalid JSON in `pi-workers.json` | Fix or delete the corrupted file |
 | `Worker name must start with pi-` | Invalid name format | Use names like `pi-zai`, `pi-openai` |
 | `Worker pi-zai already exists` | Duplicate name | Use a different name or remove existing first |
 | `Provider not found` | Invalid provider name | Use provider from `pi --list-models` output |
+| `Model not found` | Invalid model for provider | Check `pi --list-models <provider>` |
