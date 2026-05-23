@@ -108,21 +108,12 @@ If `nativeWorkers` is non-empty:
 # Build the native worker spec for omc team
 # e.g., for 1:codex, 1:gemini -> NATIVE_SPEC="1:codex,1:gemini"
 NATIVE_SPEC="<N:type[,N:type,...]>"
-NATIVE_TASKS=$(cat <<'TASKS'
-1. <codex-subtask>
-2. <gemini-subtask>
-TASKS
-)
+NATIVE_TASKS="[codex] <codex-subtask>; [gemini] <gemini-subtask>"
 
-NATIVE_LAUNCH_JSON=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" --json)
-TEAM_NAME=$(printf "%s" "$NATIVE_LAUNCH_JSON" | node -e '
-const fs = require("fs");
-const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
-const line = lines.find((value) => value.trim().startsWith("{"));
-const data = JSON.parse(line);
-process.stdout.write(data.teamName || data.data?.teamName || "");
-')
-[ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name"; exit 1; }
+NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
+# omc team outputs plain text like: "Team started: <name>\ntmux session: ...\nworkers: ..."
+TEAM_NAME=$(printf "%s" "$NATIVE_OUTPUT" | grep -oP 'Team started: *\K.*')
+[ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name from output:\n$NATIVE_OUTPUT"; exit 1; }
 ```
 
 Use `--no-decompose` only when every native worker should receive the same task text.
