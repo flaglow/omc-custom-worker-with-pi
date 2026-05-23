@@ -109,8 +109,7 @@ Also update pi's own settings if this is the first worker or the user confirms:
 # Read current settings
 cat ~/.pi/agent/settings.json
 
-# Update defaultProvider and defaultModel
-# Use node/jq to merge:
+# Update defaultProvider and defaultModel (only if missing)
 node -e "
 const fs = require('fs');
 const path = require('path');
@@ -120,8 +119,10 @@ try {
   if (fs.existsSync(settingsPath)) {
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   }
-  settings.defaultProvider = '<provider>';
-  settings.defaultModel = '<model>';
+  // Only update if missing to avoid overwriting user's own defaults
+  if (!settings.defaultProvider) settings.defaultProvider = '<provider>';
+  if (!settings.defaultModel) settings.defaultModel = '<model>';
+
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 } catch (e) {
@@ -129,6 +130,7 @@ try {
   process.exit(1);
 }
 "
+
 ```
 
 ### Step 4: Ask to create more workers

@@ -257,7 +257,7 @@ process.stdout.write(String(data.data?.task?.id || ""));
 
 Do not write `tasks/task-*.json` directly. `omc team api create-task` creates the required task schema, including `version: 1` and `depends_on: []`.
 
-#### 4c: Spawn pi worker panes
+#### Phase 4c: Registration
 
 For each pi worker instance:
 
@@ -277,6 +277,8 @@ WORKER_NAME="pi-${NAME}-${INDEX}"
 TEAM_STATE_ROOT="$(pwd)/.omc/state/team/${TEAM_NAME}"
 
 # Register worker identity and update config + manifest BEFORE spawning the pane.
+# NOTE: write-worker-identity only persists core identity (name, index, role, assigned_tasks).
+# Extended metadata (pane_id, provider, model) is handled by the direct manifest/config writes below.
 # Use placeholder pane_id; will be updated after spawn if needed.
 WORKER_IDENTITY_INPUT=$(node -e '
 const [teamName, worker, index, taskId, workingDir, teamStateRoot, provider, model] = process.argv.slice(1);
@@ -460,16 +462,22 @@ process.stdout.write(data.data?.task?.status || "unknown");
 ')
 
   if [ "$TASK_STATUS" = "in_progress" ]; then
-    echo "WARN: pi worker dead with task in_progress — respawning"
-    # Respawn with same config. Rebuild PI_COMMAND with the Phase 4c printf %q block first.
+    RESTART_COUNT=$(expr ${RESTART_COUNT:-0} + 1)
+    if [ "$RESTART_COUNT" -gt 3 ]; then
+      echo "ERROR: pi worker dead after 3 respawn attempts — fundamental failure"
+      omc team api transition-task-status --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","from":"in_progress","to":"failed","error":"pi worker crashed repeatedly"}' --json
+      continue
+    fi
+    echo "WARN: pi worker dead with task in_progress — respawning (attempt $RESTART_COUNT)"
+    # Exponential backoff: sleep 2^attempt seconds before retry
+    sleep $((2 ** RESTART_COUNT))
+    # Rebuild PI_COMMAND with the Phase 4c printf %q block first.
     PROVIDER_ARG=$(printf '%q' "$PROVIDER")
     MODEL_ARG=$(printf '%q' "$MODEL")
     BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
     TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
     PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
     tmux respawn-pane -k -t "$PANE_ID" "$PI_COMMAND"
-    # Exponential backoff: sleep 2^attempt seconds before retry
-    # Stop after 3 attempts to avoid infinite respawn loops
   fi
 fi
 ```
