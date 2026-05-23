@@ -1,14 +1,31 @@
 ---
 name: pi-team
 description: Launch omc team with mixed pi custom workers and native claude/codex/gemini workers. Pi workers use pi CLI with any provider.
-aliases: []
-level: 4
+when_to_use: Use when launching a team with pi workers, mixed pi+native teams, or multi-agent orchestration with custom LLM providers. Triggers on team launch, worker spawn, or parallel agent execution.
 argument-hint: "<N:worker-type[,N:worker-type,...]> \"<task description>\""
+arguments: [worker-spec, task]
+disable-model-invocation: true
+allowed-tools:
+  - Bash(omc *)
+  - Bash(pi *)
+  - Bash(tmux *)
+  - Bash(node *)
+  - Bash(mkdir *)
+  - Bash(cat *)
+  - Bash(git *)
+  - Bash(date *)
+  - Bash(sleep *)
+  - Bash(printf *)
+  - Bash(grep *)
+  - Bash(realpath *)
+shell: bash
 ---
 
 # Pi Team — Mixed Worker Orchestrator
 
 Launch an omc team with any combination of **pi custom workers** (zai, openai, etc.) and **omc-native workers** (claude, codex, gemini). You (Claude) serve as the orchestrator, handling pi workers directly while delegating native workers to omc team.
+
+**Supporting scripts are in `${CLAUDE_SKILL_DIR}/scripts/`.**
 
 ## Worker Type Resolution
 
@@ -24,84 +41,33 @@ Launch an omc team with any combination of **pi custom workers** (zai, openai, e
 
 ### Phase 0: Prerequisites
 
-Check all prerequisites before starting:
-
 ```bash
-# tmux
 command -v tmux >/dev/null 2>&1 || { echo "ERROR: tmux not installed"; exit 1; }
-
-# omc CLI
 command -v omc >/dev/null 2>&1 || { echo "ERROR: omc not installed"; exit 1; }
-
-# pi CLI (only if pi workers are requested — skip this check for all-native teams)
 if echo "$WORKER_SPEC" | grep -q 'pi-'; then
   command -v pi >/dev/null 2>&1 || { echo "ERROR: pi not installed. Run /pi-setup first."; exit 1; }
-fi
-
-# Node.js (required for JSON helpers and worker bootstrap)
-command -v node >/dev/null 2>&1 || { echo "ERROR: node not installed"; exit 1; }
-
-# tmux session
-echo "TMUX=$TMUX"
-tmux display-message -p '#S' 2>/dev/null || echo "Not in tmux"
-```
-
-Read worker configuration (only needed if pi workers are present):
-```bash
-if echo "$WORKER_SPEC" | grep -q 'pi-'; then
   cat ~/.claude/pi-workers.json || { echo "ERROR: pi-workers.json not found. Run /pi-setup first."; exit 1; }
 fi
+command -v node >/dev/null 2>&1 || { echo "ERROR: node not installed"; exit 1; }
+echo "TMUX=$TMUX"; tmux display-message -p '#S' 2>/dev/null || echo "Not in tmux"
 ```
-
-**Validate every pi worker referenced:**
-- Parse each `N:pi-{name}` token
-- Extract worker name (strip optional `/model` suffix)
-- **Validate worker name matches `^pi-[a-z0-9][a-z0-9-]*$`** (lowercase alphanumeric and hyphens only; no uppercase, underscores, spaces, or special characters)
-- Look up `pi-{name}` in `~/.claude/pi-workers.json`
-- If not found: ERROR with suggestion to run `/pi-setup`
 
 ### Phase 1: Parse and Classify Workers
 
-**Input format:** `N:type[,N:type,...] "task description"`
-**Regex:** `/(\d+):([a-z0-9-]+(?:\/[A-Za-z0-9._-]+)?)/g`
-
-**Classify each token:**
-- Starts with `pi-` → `piWorkers[]` array
-- Otherwise → `nativeWorkers[]` array
-
-**Example:**
+```bash
+# Parse worker spec and validate against pi-workers.json
+node "${CLAUDE_SKILL_DIR}/scripts/parse-workers.js" "$WORKER_SPEC"
 ```
-Input: 2:pi-zai, 1:codex, 1:gemini, 1:pi-openai/gpt-5
-Result:
-  piWorkers: [
-    { count: 2, name: "pi-zai", provider: "zai", model: "glm-5.1" },
-    { count: 1, name: "pi-openai", provider: "openai", model: "gpt-5" }
-  ]
-  nativeWorkers: [
-    { count: 1, type: "codex" },
-    { count: 1, type: "gemini" }
-  ]
-  totalWorkers: 5
-```
+
+This outputs JSON with `piWorkers[]`, `nativeWorkers[]`, `totalWorkers`. Each pi worker entry includes resolved `provider` and `model` from `~/.claude/pi-workers.json`.
 
 **Generate team name:**
 ```bash
-# Task text is untrusted — sanitized by the sed/tr pipeline before use in team name.
 CLEAN_TASK=$(printf '%s' '<task>' | head -c 20 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+$//' | sed 's/^-\+//' | sed 's/^\-//')
 TEAM_NAME="pi-${CLEAN_TASK}-$(date +%s | grep -oE '.{4}$')"
 
-# Validate team name immediately after assignment before using it in paths.
-case "$TEAM_NAME" in
-  ""|*[!a-zA-Z0-9_-]*)
-    echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
-    exit 1
-    ;;
-esac
-
-# Capture the full task description and calculate total workers
-# Task text is untrusted — passed to node helpers via process.argv to avoid shell interpolation.
-MAIN_TASK='<task description>'
-TOTAL_WORKERS=$(printf "%s" "$WORKER_SPEC" | grep -oE '(^|,)[[:space:]]*[0-9]+:' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s}')
+case "$TEAM_NAME" in ""|*[!a-zA-Z0-9_-]*)
+  echo "ERROR: invalid team name '$TEAM_NAME'"; exit 1;; esac
 ```
 
 ### Phase 2: Decompose Task
@@ -115,7 +81,6 @@ Split the main task into `totalWorkers` independent subtasks. Each subtask shoul
 - Codex workers → code review, security analysis
 - Gemini workers → documentation, UI design, large context tasks
 - Pi workers → general implementation, any provider-specific strengths
-- Distribute work evenly across workers
 - If task is simple, give all workers the same task description
 
 ### Phase 3: Launch omc-native Workers
@@ -123,56 +88,35 @@ Split the main task into `totalWorkers` independent subtasks. Each subtask shoul
 If `nativeWorkers` is non-empty:
 
 ```bash
-# Build the native worker spec for omc team
-# e.g., for 1:codex, 1:gemini -> NATIVE_SPEC="1:codex,1:gemini"
 NATIVE_SPEC="<N:type[,N:type,...]>"
-# Task text is untrusted — passed as positional args; pi worker tasks use printf %q for safe shell quoting.
 NATIVE_TASKS='[codex] <codex-subtask>; [gemini] <gemini-subtask>'
-
 NATIVE_OUTPUT=$(omc team "$NATIVE_SPEC" "$NATIVE_TASKS" 2>&1)
-# omc team outputs plain text like: "Team started: <name>\ntmux session: ...\nworkers: ..."
 TEAM_NAME=$(printf "%s" "$NATIVE_OUTPUT" | grep -E '^Team started:' | sed -E 's/^Team started:[[:space:]]*//' | head -n 1)
-[ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name from output:\n$NATIVE_OUTPUT"; exit 1; }
-
-# Validate team name immediately after assignment before using it in paths.
-case "$TEAM_NAME" in
-  ""|*[!a-zA-Z0-9_-]*)
-    echo "ERROR: invalid team name '$TEAM_NAME' (contains unsafe characters)"
-    exit 1
-    ;;
-esac
-
-```
-
-Use `--no-decompose` only when every native worker should receive the same task text.
-
-Wait for omc team to confirm startup:
-```bash
+[ -n "$TEAM_NAME" ] || { echo "ERROR: unable to resolve omc team name"; exit 1; }
+case "$TEAM_NAME" in ""|*[!a-zA-Z0-9_-]*)
+  echo "ERROR: invalid team name '$TEAM_NAME'"; exit 1;; esac
 omc team status "$TEAM_NAME"
 ```
 
-Record the team name and session info.
-
-If `nativeWorkers` is empty AND `piWorkers` is non-empty:
-- Create minimal team infrastructure manually (Phase 4 handles this)
-
 ### Phase 4: Launch Pi Workers
 
-For each pi worker, do the following:
+For each pi worker, execute the following sub-phases in order.
+
+**CRITICAL: Phase 4c (register) MUST run BEFORE Phase 4d (spawn) to prevent race conditions.**
 
 #### 4a: Prepare team infrastructure (if not already done by Phase 3)
 
-If omc team was NOT launched in Phase 3:
 ```bash
-# Create state directories
-mkdir -p ".omc/state/team/${TEAM_NAME}"/{tasks,workers,mailbox,dispatch,approvals}
+if [ ! -d ".omc/state/team/${TEAM_NAME}" ]; then
+  mkdir -p ".omc/state/team/${TEAM_NAME}"/{tasks,workers,mailbox,dispatch,approvals}
+fi
 ```
 
-Write **both** config.json and manifest.json. The manifest.json is required for `omc team api claim-task` to recognize workers — omitting it causes `worker_not_found` errors.
+Write config.json and manifest.json. **manifest.json is required** — `omc team api claim-task` validates workers against it.
 
 ```bash
 json_string() {
-  node -e 'process.stdout.write(JSON.stringify(process.argv[2] || ""))' -- "$1"
+  node "${CLAUDE_SKILL_DIR}/scripts/json-string.js" "$1"
 }
 
 : "${MAIN_TASK:?ERROR: MAIN_TASK is required}"
@@ -183,7 +127,6 @@ LEADER_PANE_ID=$(tmux display-message -p '#{pane_id}')
 LEADER_CWD=$(pwd)
 TEAM_STATE_ROOT="${LEADER_CWD}/.omc/state/team/${TEAM_NAME}"
 
-# Write config.json
 cat > ".omc/state/team/${TEAM_NAME}/config.json" << CFGEOF
 {
   "name": $(json_string "$TEAM_NAME"),
@@ -217,7 +160,6 @@ cat > ".omc/state/team/${TEAM_NAME}/config.json" << CFGEOF
 }
 CFGEOF
 
-# Write manifest.json (REQUIRED for claim-task worker validation)
 cat > ".omc/state/team/${TEAM_NAME}/manifest.json" << MANEOF
 {
   "schema_version": 2,
@@ -263,17 +205,8 @@ MANEOF
 
 #### 4b: Create tasks
 
-For each pi worker's subtask:
 ```bash
-CREATE_TASK_INPUT=$(node -e '
-const [teamName, subject, description] = process.argv.slice(2);
-process.stdout.write(JSON.stringify({
-  team_name: teamName,
-  subject,
-  description,
-  blocked_by: []
-}));
-' -- "$TEAM_NAME" "Task ${i}" "$SUBTASK_DESCRIPTION")
+CREATE_TASK_INPUT=$(node "${CLAUDE_SKILL_DIR}/scripts/build-api-input.js" create-task "$TEAM_NAME" "Task ${i}" "$SUBTASK_DESCRIPTION")
 
 CREATE_TASK_JSON=$(omc team api create-task --input "$CREATE_TASK_INPUT" --json)
 TASK_ID=$(printf "%s" "$CREATE_TASK_JSON" | node -e '
@@ -284,122 +217,41 @@ const data = JSON.parse(line);
 process.stdout.write(String(data.data?.task?.id || ""));
 ')
 [ -n "$TASK_ID" ] || { echo "ERROR: unable to resolve created task id"; exit 1; }
-
-# Validate task id contains only safe characters
 if ! [[ "$TASK_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "ERROR: invalid task id '$TASK_ID' (contains unsafe characters)"
-  exit 1
-fi
+  echo "ERROR: invalid task id '$TASK_ID'"; exit 1; fi
 ```
 
-Do not write `tasks/task-*.json` directly. `omc team api create-task` creates the required task schema, including `version: 1` and `depends_on: []`.
-
-#### Phase 4c: Registration
-
-For each pi worker instance:
-
-**IMPORTANT: Registration (Phase 4c) MUST happen before spawning (Phase 4d).** If the worker spawns before it's registered in manifest.json, a fast-starting pi worker can hit `worker_not_found` when it tries to claim its task.
-
-#### 4c: Register worker with omc team (BEFORE spawning)
+#### 4c: Register worker (BEFORE spawning)
 
 ```bash
-# Determine split target (last worker pane or leader pane)
-SPLIT_TARGET="<last-pane-or-leader>"
-
-# Read worker config
-# From ~/.claude/pi-workers.json: provider, model
-PROVIDER="<provider>"
-MODEL="<model>"  # Use override if pi-name/model was specified
 WORKER_NAME="pi-${NAME#pi-}-${INDEX}"
 TEAM_STATE_ROOT="$(pwd)/.omc/state/team/${TEAM_NAME}"
 
-# Register worker identity and update config + manifest BEFORE spawning the pane.
-# NOTE: write-worker-identity only persists core identity (name, index, role, assigned_tasks).
-# Extended metadata (pane_id, provider, model) is handled by the direct manifest/config writes below.
-# Use placeholder pane_id; will be updated after spawn if needed.
-WORKER_IDENTITY_INPUT=$(node -e '
-const [teamName, worker, index, taskId, workingDir, teamStateRoot, provider, model] = process.argv.slice(2);
-process.stdout.write(JSON.stringify({
-  team_name: teamName,
-  worker,
-  index: Number(index),
-  role: "executor",
-  assigned_tasks: [taskId],
-  pane_id: "pending",  // Placeholder, updated after spawn
-  working_dir: workingDir,
-  team_state_root: teamStateRoot,
-  worker_cli: "pi",
-  provider,
-  model
-}));
-' -- "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
-
+# Register via omc team api
+WORKER_IDENTITY_INPUT=$(node "${CLAUDE_SKILL_DIR}/scripts/build-api-input.js" \
+  write-worker-identity "$TEAM_NAME" "$WORKER_NAME" "$INDEX" "$TASK_ID" "$(pwd)" "$TEAM_STATE_ROOT" "$PROVIDER" "$MODEL")
 omc team api write-worker-identity --input "$WORKER_IDENTITY_INPUT" --json
 
+# Update config.json and manifest.json directly
 TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" WORKER_INDEX="$INDEX" TASK_ID="$TASK_ID" \
-PANE_ID="pending" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" node <<'NODE'
-const fs = require("fs");
-const path = require("path");
-
-const worker = {
-  name: process.env.WORKER_NAME,
-  index: Number(process.env.WORKER_INDEX),
-  role: "executor",
-  assigned_tasks: [process.env.TASK_ID],
-  pane_id: process.env.PANE_ID,
-  working_dir: process.env.CWD,
-  team_state_root: process.env.TEAM_STATE_ROOT,
-  worker_cli: "pi",
-  provider: process.env.PROVIDER,
-  model: process.env.MODEL
-};
-
-// Update config.json
-const configPath = path.join(process.env.TEAM_STATE_ROOT, "config.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-config.workers = Array.isArray(config.workers) ? config.workers.filter((entry) => entry?.name !== worker.name) : [];
-config.workers.push(worker);
-config.worker_count = Math.max(Number(config.worker_count || 0), config.workers.length);
-config.max_workers = Math.max(Number(config.max_workers || 20), config.worker_count);
-fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-
-// CRITICAL: Also update manifest.json — claim-task validates workers against manifest
-const manifestPath = path.join(process.env.TEAM_STATE_ROOT, "manifest.json");
-if (fs.existsSync(manifestPath)) {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  manifest.workers = Array.isArray(manifest.workers) ? manifest.workers.filter((entry) => entry?.name !== worker.name) : [];
-  manifest.workers.push(worker);
-  manifest.worker_count = manifest.workers.length;
-  manifest.next_task_id = Math.max(Number(manifest.next_task_id || 0), Number(process.env.TASK_ID || 0) + 1);
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-}
-NODE
+PANE_ID="pending" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" \
+  node "${CLAUDE_SKILL_DIR}/scripts/register-worker.js"
 ```
 
 #### 4d: Spawn pi worker pane (AFTER registration)
 
 ```bash
-# Read and render bootstrap template
-# Resolve plugin root: prefer env vars, then git root, then cwd
+# Resolve bootstrap template
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 PLUGIN_ROOT=$(realpath "${CLAUDE_PLUGIN_ROOT:-${OMC_PLUGIN_ROOT:-$PROJECT_ROOT}}")
 BOOTSTRAP_TEMPLATE="${PLUGIN_ROOT}/config/worker-bootstrap-prompt.md"
-[ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: worker bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
+[ -f "$BOOTSTRAP_TEMPLATE" ] || { echo "ERROR: bootstrap template not found at $BOOTSTRAP_TEMPLATE"; exit 1; }
 
+# Render template with variables
 BOOTSTRAP=$(TEAM_NAME="$TEAM_NAME" WORKER_NAME="$WORKER_NAME" TASK_ID="$TASK_ID" CWD="$(pwd)" STATE_ROOT="$TEAM_STATE_ROOT" \
-  node - "$BOOTSTRAP_TEMPLATE" <<'NODE'
-const fs = require("fs");
-const templatePath = process.argv[2];
-let text = fs.readFileSync(templatePath, "utf8");
-for (const key of ["TEAM_NAME", "WORKER_NAME", "TASK_ID", "CWD", "STATE_ROOT"]) {
-  text = text.split(`{{${key}}}`).join(process.env[key] || "");
-}
-process.stdout.write(text);
-NODE
-)
+  node "${CLAUDE_SKILL_DIR}/scripts/render-bootstrap.js" "$BOOTSTRAP_TEMPLATE")
 
-# Build task instruction with lifecycle commands
-# UNTRUSTED DATA BOUNDARY: ${SUBTASK_DESCRIPTION} below contains unvalidated text from the task assignment.
+# Build task instruction
 TASK_INSTRUCTION="## Task Assignment
 Task ID: ${TASK_ID}
 Worker: ${WORKER_NAME}
@@ -413,8 +265,7 @@ Worker: ${WORKER_NAME}
 ### Task
 ${SUBTASK_DESCRIPTION}"
 
-# Spawn in tmux. Quote every dynamic pi argument before it enters the shell command string.
-# NOTE: printf %q is bash-specific; this assumes a bash-compatible environment.
+# Spawn in tmux with safe quoting
 PROVIDER_ARG=$(printf '%q' "$PROVIDER")
 MODEL_ARG=$(printf '%q' "$MODEL")
 BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
@@ -422,50 +273,17 @@ TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
 PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
 PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" "$PI_COMMAND")
 
-# Update pane_id in config + manifest + identity now that we have the real pane ID
-TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" PANE_ID="$PANE_ID" node <<'PANEUPDATE'
-const fs = require("fs");
-const path = require("path");
-const root = process.env.TEAM_STATE_ROOT;
-const name = process.env.WORKER_NAME;
-const paneId = process.env.PANE_ID;
-for (const file of ["config.json", "manifest.json", `workers/${name}/identity.json`]) {
-  const fp = path.join(root, file);
-  if (!fs.existsSync(fp)) continue;
-  try {
-    const data = JSON.parse(fs.readFileSync(fp, "utf8"));
-    const w = file.endsWith("identity.json") ? data : (data.workers || []).find(e => e.name === name);
-    if (w) {
-      w.pane_id = paneId;
-      fs.writeFileSync(fp, JSON.stringify(data, null, 2) + "\n");
-    } else {
-      throw new Error(`Worker ${name} not found in ${file}`);
-    }
-  } catch (err) {
-    console.error(`ERROR: failed to update ${file}: ${err.message}`);
-    process.exit(1);
-  }
-}
-PANEUPDATE
+# Update pane_id in config + manifest + identity
+TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" PANE_ID="$PANE_ID" \
+  node "${CLAUDE_SKILL_DIR}/scripts/update-pane-id.js"
 ```
-
-Record the pane ID.
 
 #### 4e: Send initial task dispatch
 
-Write the task instruction to the worker's inbox:
 ```bash
-WORKER_INBOX_INPUT=$(node -e '
-const [teamName, worker, content] = process.argv.slice(2);
-process.stdout.write(JSON.stringify({ team_name: teamName, worker, content }));
-' -- "$TEAM_NAME" "$WORKER_NAME" "$TASK_INSTRUCTION")
-
+WORKER_INBOX_INPUT=$(node "${CLAUDE_SKILL_DIR}/scripts/build-api-input.js" \
+  send-message "$TEAM_NAME" "$WORKER_NAME" "$TASK_INSTRUCTION")
 omc team api write-worker-inbox --input "$WORKER_INBOX_INPUT" --json
-```
-
-Also send an initial message to the pi pane to trigger it to start:
-```bash
-# The empty string is intentional: Enter wakes the interactive pi pane after the inbox is written.
 tmux send-keys -t "$PANE_ID" "" Enter
 ```
 
@@ -476,33 +294,28 @@ You MUST actively monitor the team until all tasks reach a terminal state (compl
 **Poll every 30 seconds:**
 
 ```bash
-# Check overall team status
 omc team status "$TEAM_NAME"
-
-# Check all tasks
 omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 ```
 
 **For each pi worker, update heartbeat:**
-> **Note:** The leader updates heartbeats for pi workers. Pi workers should **NOT** self-heartbeat — the leader's monitor loop handles all heartbeat calls via `omc team api update-worker-heartbeat`.
+
+> The leader updates heartbeats for pi workers. Pi workers should **NOT** self-heartbeat.
+
 ```bash
-# Check if pane is still alive
 PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null)
 
 if [ -n "$PANE_PID" ]; then
-  # Pane alive — update heartbeat
-  PID="$PANE_PID"
   HEARTBEAT_COUNT=$(( ${HEARTBEAT_COUNT:-0} + 1 ))
   omc team api update-worker-heartbeat --input '{
     "team_name": "'"$TEAM_NAME"'",
     "worker": "'"$WORKER_NAME"'",
-    "pid": '"$PID"',
+    "pid": '"$PANE_PID"',
     "turn_count": '"$HEARTBEAT_COUNT"',
     "alive": true
   }' --json
 else
-  # Pane dead — check if task completed
-  # If task still in_progress, respawn the worker
+  # Pane dead — check if task still in_progress
   TASK_STATUS=$(omc team api read-task --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'"}' --json | node -e '
 const fs = require("fs");
 const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
@@ -514,8 +327,7 @@ process.stdout.write(data.data?.task?.status || "unknown");
   if [ "$TASK_STATUS" = "in_progress" ]; then
     RESTART_COUNT=$(( ${RESTART_COUNT:-0} + 1 ))
     if [ "$RESTART_COUNT" -gt 3 ]; then
-      echo "ERROR: pi worker dead after 3 respawn attempts — fundamental failure"
-      # Failure transition requires a claim_token from claim-task.
+      echo "ERROR: pi worker dead after 3 respawn attempts"
       CLAIM_TOKEN=$(omc team api claim-task --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","worker":"'"$WORKER_NAME"'"}' --json | node -e '
 const fs = require("fs");
 const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
@@ -524,16 +336,13 @@ const data = JSON.parse(line);
 process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "");
 ')
       if [ -z "$CLAIM_TOKEN" ]; then
-        echo "ERROR: failed to claim task before marking failed"
-        continue
+        echo "ERROR: failed to claim task before marking failed"; continue
       fi
       omc team api transition-task-status --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","from":"in_progress","to":"failed","claim_token":"'"$CLAIM_TOKEN"'","error":"pi worker crashed repeatedly"}' --json
       continue
     fi
-    echo "WARN: pi worker dead with task in_progress — respawning (attempt $RESTART_COUNT)"
-    # Exponential backoff: sleep 2^attempt seconds before retry
+    echo "WARN: pi worker dead — respawning (attempt $RESTART_COUNT)"
     sleep $((2 ** RESTART_COUNT))
-    # Rebuild PI_COMMAND with the Phase 4d printf %q block first.
     PROVIDER_ARG=$(printf '%q' "$PROVIDER")
     MODEL_ARG=$(printf '%q' "$MODEL")
     BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
@@ -544,18 +353,7 @@ process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "
 fi
 ```
 
-**Check omc-native worker status:**
-```bash
-# omc team handles native workers, but check for completeness
-omc team api get-summary --input '{"team_name":"'"$TEAM_NAME"'"}' --json
-```
-
-**Terminal condition:**
-```bash
-# All tasks must be completed or failed
-# Parse from list-tasks output
-# If all terminal → exit monitoring loop
-```
+**Terminal condition:** All tasks must be completed or failed.
 
 ### Phase 6: Report and Cleanup
 
@@ -567,7 +365,6 @@ omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 ```
 
 2. **Report to user:**
-Show a summary table:
 ```
 ## Team Results: $TEAM_NAME
 
@@ -575,7 +372,6 @@ Show a summary table:
 |--------|------|--------|---------|
 | pi-zai-1 | Task 1 | ✅ completed | Fixed auth validation |
 | codex (worker-1) | Task 2 | ✅ completed | Reviewed security |
-| gemini (worker-2) | Task 3 | ✅ completed | Updated docs |
 ```
 
 3. **Cleanup:**
@@ -593,30 +389,14 @@ omc team shutdown "$TEAM_NAME" --force
 | `omc team status: not found` | Team state missing | Check .omc/state/team/ |
 | Worker pane dead after respawn ×3 | Fundamental failure | Report to user, mark task failed |
 | `claim_token` error | Task already claimed | Skip to next available task |
-| `worker_not_found` on claim | Worker not in manifest.json | Verify Phase 4c registration ran before Phase 4d |
+| `worker_not_found` on claim | Worker not in manifest.json | Verify Phase 4c ran before 4d |
 | `write-worker-inbox` fails | Worker directory missing | Verify write-worker-identity ran first |
-| Bootstrap template not found | PLUGIN_ROOT misresolved | Set CLAUDE_PLUGIN_ROOT or OMC_PLUGIN_ROOT env var |
+| Bootstrap template not found | PLUGIN_ROOT misresolved | Set CLAUDE_PLUGIN_ROOT env var |
 
 ## Edge Cases
 
-### All pi workers, no native workers
-- Skip Phase 3 (`omc team ...`)
-- Create minimal team infrastructure in Phase 4a
-- Claude manages everything
-
-### All native workers, no pi workers
-- Skip Phase 4 (pi worker spawn)
-- Equivalent to `omc team ...`
-- Claude only monitors via `omc team status`
-
-### Single worker
-- `1:pi-zai "task"` → one pi worker, one subtask
-- No decomposition needed
-
-### Model override
-- `1:pi-zai/glm-5-turbo "task"` → use glm-5-turbo instead of configured default
-- Parse: name=`pi-zai`, model_override=`glm-5-turbo`
-
-### Mixed team with omc-native already running
-- If user already has an omc team running, pi workers can join it
-- Use `omc team api write-worker-identity` to register into existing team
+- **All pi workers, no native workers:** Skip Phase 3, create infrastructure in Phase 4a, Claude manages everything.
+- **All native workers, no pi workers:** Skip Phase 4, equivalent to plain `omc team`.
+- **Single worker:** `1:pi-zai "task"` → one pi worker, one subtask, no decomposition needed.
+- **Model override:** `1:pi-zai/glm-5-turbo "task"` → use glm-5-turbo instead of configured default.
+- **Mixed team with omc-native already running:** Use `omc team api write-worker-identity` to register pi workers into existing team.

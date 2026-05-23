@@ -60,6 +60,22 @@
 
 **Key insight:** `pi-` prefixed workers are managed by Claude directly via tmux + `omc team api`. All other workers go through the standard `omc team` command. Claude monitors everything through `omc team status`.
 
+## Plugin Structure
+
+```
+.claude-plugin/plugin.json       — Plugin manifest
+.claude-plugin/marketplace.json  — Marketplace listing
+skills/pi-setup/
+  SKILL.md                       — Worker configuration skill
+  scripts/                       — Setup helper scripts
+skills/pi-team/
+  SKILL.md                       — Team orchestration skill
+  scripts/                       — Orchestration helper scripts
+config/worker-bootstrap-prompt.md — System prompt template for pi workers
+```
+
+Skills use `${CLAUDE_SKILL_DIR}/scripts/` for portable script references. Both skills declare `disable-model-invocation: true` (user-invoked only) and `allowed-tools` for frictionless execution.
+
 ## Setup Flow (`/pi-setup`)
 
 1. **Detect pi CLI** → install if missing

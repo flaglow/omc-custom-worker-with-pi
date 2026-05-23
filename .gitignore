@@ -17,3 +17,12 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Review/temp artifacts
+*_REVIEW*.md
+REVIEW_*.md
+TASK*_*.md
+ARCHITECTURE_REVIEW*.md
+PLUGIN_REVIEW.md
+test_*.sh
+tmp/

@@ -27,9 +27,5 @@
   "skills": [
     "./skills/pi-setup/",
     "./skills/pi-team/"
-  ],
-  "commands": [
-    "./commands/pi-setup.md",
-    "./commands/pi-team.md"
   ]
 }

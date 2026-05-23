@@ -1,14 +1,26 @@
 ---
 name: pi-setup
 description: Setup pi CLI as a custom worker for omc teams. Configure providers, models, and register custom worker names.
-aliases: []
-level: 2
+when_to_use: Use when setting up pi workers, configuring providers, registering worker names, or when pi-workers.json is missing or needs updating.
 argument-hint: ""
+disable-model-invocation: true
+allowed-tools:
+  - Bash(pi *)
+  - Bash(omc *)
+  - Bash(node *)
+  - Bash(command *)
+  - Bash(npm *)
+  - Bash(cat *)
+  - Bash(mkdir *)
+  - Bash(tmux *)
+shell: bash
 ---
 
 # Pi Worker Setup
 
-Configure pi CLI as a custom worker type for oh-my-claudecode teams. This creates worker definitions stored in `~/.claude/pi-workers.json` that can be used with `/pi-team`.
+Configure pi CLI as a custom worker type for oh-my-claudecode teams. Creates worker definitions stored in `~/.claude/pi-workers.json` that can be used with `/pi-team`.
+
+**Supporting scripts are in `${CLAUDE_SKILL_DIR}/scripts/`.**
 
 ## Prerequisites Check
 
@@ -28,7 +40,6 @@ After installation, run `pi` once to complete login/API key setup interactively.
 ```bash
 command -v omc >/dev/null 2>&1 && omc --version
 ```
-If not installed, install oh-my-claudecode first via the marketplace.
 
 3. **tmux installed:**
 ```bash
@@ -39,7 +50,6 @@ command -v tmux >/dev/null 2>&1
 
 ### Step 1: Check existing configuration
 
-Read the current worker configuration if it exists:
 ```bash
 cat ~/.claude/pi-workers.json 2>/dev/null
 ```
@@ -53,53 +63,13 @@ Currently registered pi workers:
 
 ### Step 2: List available providers
 
-Show what providers pi supports by listing models:
 ```bash
 pi --list-models 2>&1 | awk 'NR>1 {print $1}' | sort -u | grep -v '^$'
 ```
 
-Also check pi's current default configuration:
+Check pi's current default configuration (secrets redacted):
 ```bash
-node <<'NODE'
-const fs = require('fs');
-const path = require('path');
-
-const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
-
-function isSecretKey(key) {
-  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
-  return normalized === 'key' ||
-    normalized.includes('apikey') ||
-    normalized.includes('token') ||
-    normalized.includes('secret') ||
-    normalized.includes('password') ||
-    normalized.includes('credential') ||
-    normalized.includes('authorization');
-}
-
-function redact(value) {
-  if (Array.isArray(value)) return value.map(redact);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [
-      key,
-      isSecretKey(key) ? '<redacted>' : redact(child)
-    ])
-  );
-}
-
-try {
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-  console.log(JSON.stringify(redact(settings), null, 2));
-} catch (e) {
-  if (e.code === 'ENOENT') {
-    console.error('~/.pi/agent/settings.json not found');
-    process.exit(0);
-  }
-  console.error('Error reading settings.json:', e.message);
-  process.exit(1);
-}
-NODE
+node "${CLAUDE_SKILL_DIR}/scripts/read-pi-settings.js"
 ```
 
 ### Step 3: Create a custom worker (repeat loop)
@@ -115,7 +85,6 @@ pi --list-models "<provider>" 2>&1
 ```
 
 **"Select a default model for pi-<provider>:"**
-(Show the model list)
 
 After the user selects a model:
 
@@ -124,161 +93,21 @@ After the user selects a model:
 Validate the worker name (must match `^pi-[a-z0-9][a-z0-9-]*$`):
 - Must start with `pi-` (e.g., `pi-myworker`)
 - Suffix after `pi-` must be at least 1 character long
-- Must use lowercase alphanumeric characters and hyphens only (no uppercase, underscores, spaces, or special characters)
-- Must not conflict with existing workers or reserved names (`claude`, `codex`, `gemini`)
-
-Also validate:
-- Provider and model must be non-empty strings
-- Existing pi-workers.json is schema-validated (version field present, workers is an object)
+- Must use lowercase alphanumeric characters and hyphens only
+- Must not conflict with reserved names (`claude`, `codex`, `gemini`)
 
 Save the worker to `~/.claude/pi-workers.json`:
-
 ```bash
-# Save and merge worker configuration
-# Values passed via process.argv for shell safety (no inline interpolation)
-node -e '
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const configPath = path.join(process.env.HOME, ".claude/pi-workers.json");
-const workerName = process.argv[2];
-const provider = process.argv[3];
-const model = process.argv[4];
-
-const RESERVED_SUFFIXES = ["claude", "codex", "gemini"];
-
-// Validate worker name format
-if (!workerName || !/^pi-[a-z0-9][a-z0-9-]*$/.test(workerName)) {
-  console.error("Invalid worker name: must match ^pi-[a-z0-9][a-z0-9-]*$");
-  process.exit(1);
-}
-if (RESERVED_SUFFIXES.includes(workerName.slice(3))) {
-  console.error("Worker name suffix is reserved: " + workerName.slice(3));
-  process.exit(1);
-}
-if (!provider || typeof provider !== "string" || !provider.trim()) {
-  console.error("Provider must be a non-empty string");
-  process.exit(1);
-}
-if (!model || typeof model !== "string" || !model.trim()) {
-  console.error("Model must be a non-empty string");
-  process.exit(1);
-}
-
-try {
-  let config = { version: 1, workers: {} };
-  if (fs.existsSync(configPath)) {
-    const raw = fs.readFileSync(configPath, "utf8");
-    if (raw.trim()) {
-      config = JSON.parse(raw);
-      // JSON schema validation
-      if (typeof config.version === "undefined") {
-        console.error("Invalid pi-workers.json: missing version field");
-        process.exit(1);
-      }
-      if (typeof config.workers !== "object" || config.workers === null || Array.isArray(config.workers)) {
-        console.error("Invalid pi-workers.json: workers must be an object");
-        process.exit(1);
-      }
-    }
-  }
-
-  // Warn if overwriting existing worker
-  if (config.workers[workerName]) {
-    console.warn("WARNING: Worker \"" + workerName + "\" already exists. Overwriting.");
-  }
-
-  if (!config.workers) config.workers = {};
-  config.workers[workerName] = {
-    provider,
-    model,
-    binary: "pi",
-    createdAt: new Date().toISOString()
-  };
-
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  // Atomic write: temp file then rename to target
-  const tmpPath = path.join(os.tmpdir(), "pi-workers-" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".tmp");
-  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n");
-  fs.chmodSync(tmpPath, 0o600);
-  fs.renameSync(tmpPath, configPath);
-  console.log("Successfully registered " + workerName);
-} catch (e) {
-  console.error("Error updating pi-workers.json:", e.message);
-  process.exit(1);
-}
-' -- '<worker-name>' '<provider>' '<model>'
+node "${CLAUDE_SKILL_DIR}/scripts/register-worker.js" '<worker-name>' '<provider>' '<model>'
 ```
 
 Also update pi's own settings if this is the first worker or the user confirms:
 ```bash
-# Read current settings
-node <<'NODE'
-const fs = require('fs');
-const path = require('path');
-
-const settingsPath = path.join(process.env.HOME, '.pi/agent/settings.json');
-
-function isSecretKey(key) {
-  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
-  return normalized === 'key' ||
-    normalized.includes('apikey') ||
-    normalized.includes('token') ||
-    normalized.includes('secret') ||
-    normalized.includes('password') ||
-    normalized.includes('credential') ||
-    normalized.includes('authorization');
-}
-
-function redact(value) {
-  if (Array.isArray(value)) return value.map(redact);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [
-      key,
-      isSecretKey(key) ? '<redacted>' : redact(child)
-    ])
-  );
-}
-
-try {
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-  console.log(JSON.stringify(redact(settings), null, 2));
-} catch (e) {
-  if (e.code === 'ENOENT') {
-    console.error('~/.pi/agent/settings.json not found');
-    process.exit(0);
-  }
-  console.error('Error reading settings.json:', e.message);
-  process.exit(1);
-}
-NODE
+# Read current settings (secrets redacted)
+node "${CLAUDE_SKILL_DIR}/scripts/read-pi-settings.js"
 
 # Update defaultProvider and defaultModel (only if missing)
-node -e '
-const fs = require("fs");
-const path = require("path");
-const settingsPath = path.join(process.env.HOME, ".pi/agent/settings.json");
-try {
-  let settings = {};
-  if (fs.existsSync(settingsPath)) {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  }
-  // Only update if missing to avoid overwriting user's own defaults
-  const provider = process.argv[2];
-  const model = process.argv[3];
-  if (!settings.defaultProvider) settings.defaultProvider = provider;
-  if (!settings.defaultModel) settings.defaultModel = model;
-
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  fs.chmodSync(settingsPath, 0o600);
-} catch (e) {
-  console.error("Error updating settings.json:", e.message);
-  process.exit(1);
-}
-' -- '<provider>' '<model>'
-
+node "${CLAUDE_SKILL_DIR}/scripts/update-pi-settings.js" '<provider>' '<model>'
 ```
 
 ### Step 4: Ask to create more workers
@@ -350,5 +179,3 @@ When a user specifies a worker like `pi-zai` or `pi-zai/glm-5-turbo`:
 | `Worker name suffix is reserved` | Reserved name used | Choose a name that does not use `claude`, `codex`, or `gemini` suffix |
 | `Provider must be a non-empty string` | Empty provider | Provide a valid provider name |
 | `Model must be a non-empty string` | Empty model | Provide a valid model name |
-| `Provider not found` | Invalid provider name | Use provider from `pi --list-models` output |
-| `Model not found` | Invalid model for provider | Check `pi --list-models "<provider>"` |
