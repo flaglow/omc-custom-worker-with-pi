@@ -14,3 +14,5 @@ This compatibility command keeps `/omc-custom-worker-with-pi:pi-setup` available
 ```text
 $ARGUMENTS
 ```
+
+If the file is not directly readable from the current working directory, locate it under the active `CLAUDE_PLUGIN_ROOT`/`OMC_PLUGIN_ROOT`, package root, or installed plugin directory, then continue.

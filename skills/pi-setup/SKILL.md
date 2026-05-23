@@ -129,18 +129,41 @@ Validate the worker name (must match `^pi-[a-z0-9][a-z0-9-]*$`):
 
 Save the worker to `~/.claude/pi-workers.json`:
 
-```json
-{
-  "version": 1,
-  "workers": {
-    "pi-zai": {
-      "provider": "zai",
-      "model": "glm-5.1",
-      "binary": "pi",
-      "createdAt": "2026-05-23T12:00:00Z"
+```bash
+# Save and merge worker configuration
+node -e "
+const fs = require('fs');
+const path = require('path');
+const configPath = path.join(process.env.HOME, '.claude/pi-workers.json');
+const workerName = '<worker-name>';
+const provider = '<provider>';
+const model = '<model>';
+
+try {
+  let config = { version: 1, workers: {} };
+  if (fs.existsSync(configPath)) {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    if (raw.trim()) {
+      config = JSON.parse(raw);
     }
   }
+  
+  if (!config.workers) config.workers = {};
+  config.workers[workerName] = {
+    provider,
+    model,
+    binary: 'pi',
+    createdAt: new Date().toISOString()
+  };
+
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  console.log('Successfully registered ' + workerName);
+} catch (e) {
+  console.error('Error updating pi-workers.json:', e.message);
+  process.exit(1);
 }
+"
 ```
 
 Also update pi's own settings if this is the first worker or the user confirms:

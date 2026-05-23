@@ -304,7 +304,7 @@ SPLIT_TARGET="<last-pane-or-leader>"
 # From ~/.claude/pi-workers.json: provider, model
 PROVIDER="<provider>"
 MODEL="<model>"  # Use override if pi-name/model was specified
-WORKER_NAME="pi-${NAME}-${INDEX}"
+WORKER_NAME="pi-${NAME#pi-}-${INDEX}"
 TEAM_STATE_ROOT="$(pwd)/.omc/state/team/${TEAM_NAME}"
 
 # Register worker identity and update config + manifest BEFORE spawning the pane.
@@ -414,20 +414,29 @@ TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
 PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
 PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" "$PI_COMMAND")
 
-# Update pane_id in config + manifest now that we have the real pane ID
+# Update pane_id in config + manifest + identity now that we have the real pane ID
 TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" PANE_ID="$PANE_ID" node <<'PANEUPDATE'
 const fs = require("fs");
 const path = require("path");
 const root = process.env.TEAM_STATE_ROOT;
 const name = process.env.WORKER_NAME;
 const paneId = process.env.PANE_ID;
-for (const file of ["config.json", "manifest.json"]) {
+for (const file of ["config.json", "manifest.json", `workers/${name}/identity.json`]) {
   const fp = path.join(root, file);
+  if (!fs.existsSync(fp)) continue;
   try {
     const data = JSON.parse(fs.readFileSync(fp, "utf8"));
-    const w = (data.workers || []).find(e => e.name === name);
-    if (w) { w.pane_id = paneId; fs.writeFileSync(fp, JSON.stringify(data, null, 2) + "\n"); }
-  } catch {}
+    const w = file.endsWith("identity.json") ? data : (data.workers || []).find(e => e.name === name);
+    if (w) {
+      w.pane_id = paneId;
+      fs.writeFileSync(fp, JSON.stringify(data, null, 2) + "\n");
+    } else {
+      throw new Error(`Worker ${name} not found in ${file}`);
+    }
+  } catch (err) {
+    console.error(`ERROR: failed to update ${file}: ${err.message}`);
+    process.exit(1);
+  }
 }
 PANEUPDATE
 ```
@@ -469,12 +478,11 @@ omc team api list-tasks --input '{"team_name":"'"$TEAM_NAME"'"}' --json
 **For each pi worker, update heartbeat:**
 ```bash
 # Check if pane is still alive
-tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null
-PANE_PID=$?
+PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null)
 
-if [ "$PANE_PID" -eq 0 ]; then
+if [ -n "$PANE_PID" ]; then
   # Pane alive — update heartbeat
-  PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}')
+  PID="$PANE_PID"
   HEARTBEAT_COUNT=$(( ${HEARTBEAT_COUNT:-0} + 1 ))
   omc team api update-worker-heartbeat --input '{
     "team_name": "'"$TEAM_NAME"'",
@@ -516,7 +524,7 @@ process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "
     echo "WARN: pi worker dead with task in_progress — respawning (attempt $RESTART_COUNT)"
     # Exponential backoff: sleep 2^attempt seconds before retry
     sleep $((2 ** RESTART_COUNT))
-    # Rebuild PI_COMMAND with the Phase 4c printf %q block first.
+    # Rebuild PI_COMMAND with the Phase 4d printf %q block first.
     PROVIDER_ARG=$(printf '%q' "$PROVIDER")
     MODEL_ARG=$(printf '%q' "$MODEL")
     BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")

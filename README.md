@@ -45,7 +45,7 @@
 /pi-team 2:pi-zai, 1:codex, 1:gemini "task"
          │
          ├─ omc-native [1:codex, 1:gemini]
-         │   → omc team start (V2 runtime manages lifecycle)
+         │   → omc team (V2 runtime manages lifecycle)
          │
          ├─ pi-custom [2:pi-zai]
          │   → tmux + pi --append-system-prompt (Claude manages)
@@ -115,7 +115,7 @@
 
 | Feature | Native workers (claude/codex/gemini) | Pi workers |
 |---|---|---|
-| Launch | `omc team start` | tmux + pi CLI |
+| Launch | `omc team` | tmux + pi CLI |
 | Task lifecycle | omc team api | omc team api (identical) |
 | Heartbeat | AGENTS.md bootstrap | --append-system-prompt bootstrap |
 | Monitoring | omc V2 runtime | Claude (active monitoring) |
