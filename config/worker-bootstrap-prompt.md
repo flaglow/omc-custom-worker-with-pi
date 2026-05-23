@@ -27,8 +27,9 @@ Execute the task described in your assignment. Use your tools (read, bash, edit,
 **IMPORTANT: Git commit before completion.** After finishing the work, commit only your changes:
 
 ```bash
-# Stage only the files you changed (avoid staging unrelated work)
-git add -A
+# Review the worktree, then stage only the exact files you changed.
+git status --short
+git add -- path/to/file-you-changed another/path-you-changed
 git diff --cached --stat   # Review what will be committed
 git commit -m "task: <brief description of what you did>"
 ```

@@ -456,7 +456,19 @@ process.stdout.write(data.data?.task?.status || "unknown");
     RESTART_COUNT=$(expr ${RESTART_COUNT:-0} + 1)
     if [ "$RESTART_COUNT" -gt 3 ]; then
       echo "ERROR: pi worker dead after 3 respawn attempts — fundamental failure"
-      omc team api transition-task-status --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","from":"in_progress","to":"failed","error":"pi worker crashed repeatedly"}' --json
+      # Failure transition requires a claim_token from claim-task.
+      CLAIM_TOKEN=$(omc team api claim-task --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","worker":"'"$WORKER_NAME"'"}' --json | node -e '
+const fs = require("fs");
+const lines = fs.readFileSync(0, "utf8").trim().split(/\n/).reverse();
+const line = lines.find((value) => value.trim().startsWith("{"));
+const data = JSON.parse(line);
+process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "");
+')
+      if [ -z "$CLAIM_TOKEN" ]; then
+        echo "ERROR: failed to claim task before marking failed"
+        continue
+      fi
+      omc team api transition-task-status --input '{"team_name":"'"$TEAM_NAME"'","task_id":"'"$TASK_ID"'","from":"in_progress","to":"failed","claim_token":"'"$CLAIM_TOKEN"'","error":"pi worker crashed repeatedly"}' --json
       continue
     fi
     echo "WARN: pi worker dead with task in_progress — respawning (attempt $RESTART_COUNT)"
