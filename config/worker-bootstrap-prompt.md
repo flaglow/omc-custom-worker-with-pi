@@ -24,6 +24,15 @@ Save the `claim_token` from the JSON response. You need it for step 3 and 4.
 
 Execute the task described in your assignment. Use your tools (read, bash, edit, write) to complete the work.
 
+**IMPORTANT: Git commit before completion.** After finishing the work, commit your changes:
+
+```bash
+git add -A
+git commit -m "task: <brief description of what you did>"
+```
+
+If there are no changes to commit (e.g., read-only analysis task), skip this step.
+
 While working, periodically update your status (every 2-3 minutes):
 
 ```bash
@@ -64,6 +73,12 @@ omc team api send-message --input '{"team_name":"{{TEAM_NAME}}","from_worker":"{
 ### Check mailbox
 ```bash
 omc team api mailbox-list --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}"}' --json
+```
+
+### Mark messages as delivered
+After reading and acting on a message, mark it as delivered to prevent duplicate processing:
+```bash
+omc team api mailbox-mark-delivered --input '{"team_name":"{{TEAM_NAME}}","worker":"{{WORKER_NAME}}","message_id":"MESSAGE_ID"}' --json
 ```
 
 ## Important Rules

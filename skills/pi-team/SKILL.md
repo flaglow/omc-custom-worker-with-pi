@@ -145,8 +145,10 @@ If omc team was NOT launched in Phase 3:
 mkdir -p .omc/state/team/${TEAM_NAME}/{tasks,workers,mailbox,dispatch,approvals}
 ```
 
-Write minimal config.json:
+Write **both** config.json and manifest.json. The manifest.json is required for `omc team api claim-task` to recognize workers — omitting it causes `worker_not_found` errors.
+
 ```bash
+# Write config.json
 cat > .omc/state/team/${TEAM_NAME}/config.json << 'CFGEOF'
 {
   "name": "<TEAM_NAME>",
@@ -179,6 +181,49 @@ cat > .omc/state/team/${TEAM_NAME}/config.json << 'CFGEOF'
   "worktree_mode": "disabled"
 }
 CFGEOF
+
+# Write manifest.json (REQUIRED for claim-task worker validation)
+cat > .omc/state/team/${TEAM_NAME}/manifest.json << 'MANEOF'
+{
+  "schema_version": 2,
+  "name": "<TEAM_NAME>",
+  "task": "<main task>",
+  "leader": {
+    "session_id": "<tmux_session>:0",
+    "worker_id": "leader-fixed",
+    "role": "leader"
+  },
+  "policy": {
+    "display_mode": "split_pane",
+    "worker_launch_mode": "interactive",
+    "dispatch_mode": "hook_preferred_with_fallback",
+    "dispatch_ack_timeout_ms": 15000
+  },
+  "governance": {
+    "delegation_only": false,
+    "plan_approval_required": false,
+    "nested_teams_allowed": false,
+    "one_team_per_leader_session": true,
+    "cleanup_requires_all_workers_inactive": true
+  },
+  "permissions_snapshot": {
+    "approval_mode": "default",
+    "sandbox_mode": "default",
+    "network_access": false
+  },
+  "tmux_session": "<tmux_session>",
+  "worker_count": 0,
+  "workers": [],
+  "next_task_id": 1,
+  "created_at": "<ISO>",
+  "leader_cwd": "<cwd>",
+  "team_state_root": "<cwd>/.omc/state/team/<TEAM_NAME>",
+  "workspace_mode": "single",
+  "worktree_mode": "disabled",
+  "leader_pane_id": "<current pane>",
+  "hud_pane_id": null
+}
+MANEOF
 ```
 
 #### 4b: Create tasks
@@ -292,8 +337,7 @@ TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" WORKER_INDEX="$IND
 PANE_ID="$PANE_ID" PROVIDER="$PROVIDER" MODEL="$MODEL" CWD="$(pwd)" node <<'NODE'
 const fs = require("fs");
 const path = require("path");
-const configPath = path.join(process.env.TEAM_STATE_ROOT, "config.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
 const worker = {
   name: process.env.WORKER_NAME,
   index: Number(process.env.WORKER_INDEX),
@@ -306,11 +350,26 @@ const worker = {
   provider: process.env.PROVIDER,
   model: process.env.MODEL
 };
+
+// Update config.json
+const configPath = path.join(process.env.TEAM_STATE_ROOT, "config.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 config.workers = Array.isArray(config.workers) ? config.workers.filter((entry) => entry?.name !== worker.name) : [];
 config.workers.push(worker);
 config.worker_count = Math.max(Number(config.worker_count || 0), config.workers.length);
 config.max_workers = Math.max(Number(config.max_workers || 20), config.worker_count);
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+// CRITICAL: Also update manifest.json — claim-task validates workers against manifest
+const manifestPath = path.join(process.env.TEAM_STATE_ROOT, "manifest.json");
+if (fs.existsSync(manifestPath)) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.workers = Array.isArray(manifest.workers) ? manifest.workers.filter((entry) => entry?.name !== worker.name) : [];
+  manifest.workers.push(worker);
+  manifest.worker_count = manifest.workers.length;
+  manifest.next_task_id = Math.max(Number(manifest.next_task_id || 0), Number(process.env.TASK_ID || 0) + 1);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+}
 NODE
 ```
 
