@@ -1,0 +1,38 @@
+# omc-custom-worker-with-pi
+
+This project is a Claude Code plugin that adds pi CLI workers (any LLM provider) to oh-my-claudecode teams.
+
+## Structure
+
+```
+.claude-plugin/plugin.json    — Plugin metadata and skill/command references
+.claude-plugin/marketplace.json — Marketplace listing
+skills/pi-setup/SKILL.md      — Worker setup/configuration skill
+skills/pi-team/SKILL.md       — Team orchestration skill (mixed pi + native workers)
+commands/pi-setup.md           — Command dispatch shim for /pi-setup
+commands/pi-team.md            — Command dispatch shim for /pi-team
+config/worker-bootstrap-prompt.md — System prompt template for pi workers
+README.md                      — User-facing documentation
+```
+
+## Key Design Decisions
+
+- **manifest.json is critical**: `omc team api claim-task` validates workers against `manifest.json`, not `config.json`. Both files must be created (Phase 4a) and updated (Phase 4d) for pi workers.
+- **omc vs omx**: `omc` and `omx` are aliases. This plugin uses `omc` throughout.
+- **Dual registration**: Pi workers are registered via both `omc team api write-worker-identity` AND direct file writes to config.json + manifest.json. The API call creates the identity file; the direct writes ensure claim-task can find the worker.
+- **Git commit protocol**: Bootstrap template instructs pi workers to commit changes before reporting task completion.
+- **Template variables**: `{{TEAM_NAME}}`, `{{WORKER_NAME}}`, `{{TASK_ID}}`, `{{CWD}}`, `{{STATE_ROOT}}` — substituted via Node.js in SKILL.md Phase 4c.
+
+## Testing
+
+Run integration tests against `omc team api` operations:
+```bash
+# Validates: create-task, write-worker-identity, claim-task, transition-task-status,
+# send-message, mailbox-list, update-worker-heartbeat, get-summary
+```
+
+## Conventions
+
+- Worker names must start with `pi-` (e.g., `pi-zai`, `pi-openai`)
+- Configuration stored in `~/.claude/pi-workers.json`
+- Team state in `.omc/state/team/<team-name>/`

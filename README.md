@@ -101,13 +101,15 @@
 
 ## How It Works
 
-1. **Worker bootstrap:** Pi workers receive a system prompt via `--append-system-prompt` that instructs them to follow the omc team API protocol (claim tasks, update heartbeat, report completion).
+1. **Worker bootstrap:** Pi workers receive a system prompt via `--append-system-prompt` that instructs them to follow the omc team API protocol (claim tasks, update heartbeat, report completion). The bootstrap includes git commit instructions and mailbox acknowledgment protocol.
 
-2. **Team integration:** Pi workers are registered via `omc team api write-worker-identity`, making them visible in `omc team status` alongside native workers.
+2. **Team integration:** Pi workers are registered via `omc team api write-worker-identity`, and both `config.json` and `manifest.json` are updated so that `omc team api claim-task` recognizes the worker. Workers are visible in `omc team status` alongside native workers.
 
 3. **Monitoring:** Claude actively monitors pi workers by checking pane liveness and updating heartbeats. Dead workers are auto-respawned (up to 3 attempts with exponential backoff).
 
-4. **Lifecycle:** Pi workers run in interactive REPL mode inside tmux panes, using their bash tool to call `omc team api` commands — the same protocol claude/codex/gemini workers follow.
+4. **Lifecycle:** Pi workers run in interactive REPL mode inside tmux panes, using their bash tool to call `omc team api` commands — the same protocol claude/codex/gemini workers follow. Workers commit their changes via git before reporting task completion.
+
+5. **CLI note:** This plugin uses `omc` commands throughout. `omx` is an alias for `omc` and both work identically.
 
 ## Comparison
 
