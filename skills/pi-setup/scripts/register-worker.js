@@ -30,6 +30,7 @@ if (!model || typeof model !== 'string' || !model.trim()) {
   process.exit(1);
 }
 
+let tmpPath;
 try {
   let config = { version: 1, workers: {} };
   if (fs.existsSync(configPath)) {
@@ -60,12 +61,15 @@ try {
   };
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  const tmpPath = path.join(os.tmpdir(), 'pi-workers-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.tmp');
+  tmpPath = path.join(os.tmpdir(), 'pi-workers-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.tmp');
   fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n');
   fs.chmodSync(tmpPath, 0o600);
   fs.renameSync(tmpPath, configPath);
   console.log('Successfully registered ' + workerName);
 } catch (e) {
+  if (tmpPath && fs.existsSync(tmpPath)) {
+    try { fs.unlinkSync(tmpPath); } catch (ignore) {}
+  }
   console.error('Error updating pi-workers.json:', e.message);
   process.exit(1);
 }

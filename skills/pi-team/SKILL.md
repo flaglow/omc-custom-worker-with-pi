@@ -18,6 +18,9 @@ allowed-tools:
   - Bash(printf *)
   - Bash(grep *)
   - Bash(realpath *)
+  - Bash(mktemp *)
+  - Bash(chmod *)
+  - Bash(rm *)
 shell: bash
 ---
 
@@ -263,13 +266,41 @@ Worker: ${WORKER_NAME}
 ### Task
 ${SUBTASK_DESCRIPTION}"
 
-# Spawn in tmux with safe quoting
-PROVIDER_ARG=$(printf '%q' "$PROVIDER")
-MODEL_ARG=$(printf '%q' "$MODEL")
-BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
-TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
-PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
-PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" "$PI_COMMAND")
+# Spawn in tmux with prompt/task temp files so task text is never shell source
+create_pi_launcher() {
+  BOOTSTRAP_FILE=$(mktemp "${TMPDIR:-/tmp}/pi-bootstrap.XXXXXX")
+  TASK_INSTRUCTION_FILE=$(mktemp "${TMPDIR:-/tmp}/pi-task.XXXXXX")
+  PI_LAUNCHER=$(mktemp "${TMPDIR:-/tmp}/pi-launch.XXXXXX")
+
+  printf '%s' "$BOOTSTRAP" > "$BOOTSTRAP_FILE"
+  printf '%s' "$TASK_INSTRUCTION" > "$TASK_INSTRUCTION_FILE"
+  cat > "$PI_LAUNCHER" <<'PI_LAUNCHER_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cleanup() {
+  rm -f "$BOOTSTRAP_FILE" "$TASK_INSTRUCTION_FILE" "$PI_LAUNCHER"
+}
+trap cleanup EXIT
+pi --provider "$PROVIDER" --model "$MODEL" --append-system-prompt "$BOOTSTRAP_FILE" "@$TASK_INSTRUCTION_FILE"
+PI_LAUNCHER_EOF
+  chmod 700 "$PI_LAUNCHER"
+}
+
+cleanup_pi_spawn_files() {
+  rm -f "$BOOTSTRAP_FILE" "$TASK_INSTRUCTION_FILE" "$PI_LAUNCHER"
+}
+
+create_pi_launcher
+if ! PANE_ID=$(tmux split-window -v -d -P -F '#{pane_id}' -c "$(pwd)" \
+  -e "PROVIDER=$PROVIDER" \
+  -e "MODEL=$MODEL" \
+  -e "BOOTSTRAP_FILE=$BOOTSTRAP_FILE" \
+  -e "TASK_INSTRUCTION_FILE=$TASK_INSTRUCTION_FILE" \
+  -e "PI_LAUNCHER=$PI_LAUNCHER" \
+  "$PI_LAUNCHER"); then
+  cleanup_pi_spawn_files
+  exit 1
+fi
 
 # Update pane_id in config + manifest + identity
 TEAM_STATE_ROOT="$TEAM_STATE_ROOT" WORKER_NAME="$WORKER_NAME" PANE_ID="$PANE_ID" \
@@ -332,6 +363,7 @@ omc team api write-monitor-snapshot --input '{"team_name":"'"$TEAM_NAME"'","snap
 Pi workers now self-heartbeat (Step 4 in bootstrap). The leader supplements with tmux pane PID checks:
 
 ```bash
+HEARTBEAT_FRESH_MS=60000
 PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null)
 
 if [ -n "$PANE_PID" ]; then
@@ -356,8 +388,8 @@ else
     const hb = data.data?.heartbeat;
     if (!hb || !hb.lastPollAt) { process.stdout.write("false"); process.exit(0); }
     const age = Date.now() - new Date(hb.lastPollAt).getTime();
-    process.stdout.write(age < 60000 ? "true" : "false");
-  ')
+    process.stdout.write(age < Number(process.argv[1]) ? "true" : "false");
+  ' "$HEARTBEAT_FRESH_MS")
 
   if [ "$WORKER_ALIVE" = "true" ]; then
     echo "INFO: pane dead but worker heartbeat recent — process may have reparented"
@@ -397,12 +429,17 @@ process.stdout.write(data.data?.claimToken || data.data?.task?.claim?.token || "
     fi
     echo "WARN: pi worker dead — respawning (attempt $RESTART_COUNT)"
     sleep $((2 ** RESTART_COUNT))
-    PROVIDER_ARG=$(printf '%q' "$PROVIDER")
-    MODEL_ARG=$(printf '%q' "$MODEL")
-    BOOTSTRAP_ARG=$(printf '%q' "$BOOTSTRAP")
-    TASK_ARG=$(printf '%q' "$TASK_INSTRUCTION")
-    PI_COMMAND="pi --provider ${PROVIDER_ARG} --model ${MODEL_ARG} --append-system-prompt ${BOOTSTRAP_ARG} ${TASK_ARG}"
-    tmux respawn-pane -k -t "$PANE_ID" "$PI_COMMAND"
+    create_pi_launcher
+    if ! tmux respawn-pane -k -t "$PANE_ID" \
+      -e "PROVIDER=$PROVIDER" \
+      -e "MODEL=$MODEL" \
+      -e "BOOTSTRAP_FILE=$BOOTSTRAP_FILE" \
+      -e "TASK_INSTRUCTION_FILE=$TASK_INSTRUCTION_FILE" \
+      -e "PI_LAUNCHER=$PI_LAUNCHER" \
+      "$PI_LAUNCHER"; then
+      cleanup_pi_spawn_files
+      continue
+    fi
   fi
 fi
 ```
